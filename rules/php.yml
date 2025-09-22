@@ -1,0 +1,24 @@
+﻿rules:
+  - id: PHP-SQLI-001
+    name: "SQL Injection (mysqli_query with concat)"
+    pattern: "(?s)mysqli_query\\s*\\(\\s*\\$\\w+\\s*,\\s*\".*\"\\s*\\.\\s*\\$\\w+"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "Concatenating user input into SQL enables injection."
+    fix:
+      type: "suggest"
+      message: "Use prepared statements (PDO::prepare/execute)."
+
+  - id: PHP-XSS-001
+    name: "Reflected XSS via echo of user input"
+    pattern: "(?m)echo\\s*\\$\\w+\\s*;|print\\s*\\$\\w+\\s*;"
+    cwe: "CWE-79"
+    owasp: "A03:2021-Injection"
+    severity: "MEDIUM"
+    confidence: 0.75
+    why: "Echoing unsanitized input can execute JS in the browser."
+    fix:
+      type: "suggest"
+      message: "Escape/encode output (htmlspecialchars) or validate inputs."

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeguardian"
+version = "0.1.0"
+description = "Lightweight static analysis and quick-fix engine"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Your Name" }]
+dependencies = ["pyyaml", "regex", "requests", "openpyxl", "jinja2"]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "black", "mypy", "types-PyYAML", "types-requests"]
+
+[project.scripts]
+codeguardian = "cli:main"
+
+# >>> Add explicit package selection <<<
+[tool.setuptools]
+packages = ["engine"]
+py-modules = ["cli"]
+
+# (Optional) If later you add non-Python data inside engine/, declare it like:
+# [tool.setuptools.package-data]
+# engine = ["**/*.yml", "**/*.jinja2", "**/*.html"]

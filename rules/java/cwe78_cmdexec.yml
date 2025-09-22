@@ -1,0 +1,9 @@
+id: JAVA.CWE78.CMDEXEC.RUNTIME
+name: Potential command injection via Runtime.exec / ProcessBuilder
+cwe: CWE-78
+owasp: A03:2021-Injection
+severity: high
+languages: [java]
+patterns:
+  - 'Runtime\.getRuntime\(\)\.exec\s*\(\s*.*(getParameter|getHeader|getQueryString|getReader\s*\(\)\.readLine)\s*\('
+  - 'new\s+ProcessBuilder\s*\(\s*.*(getParameter|getHeader|getQueryString|getReader\s*\(\)\.readLine)\s*\('

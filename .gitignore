@@ -1,0 +1,71 @@
+﻿# Python caches and artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Distribution / packaging
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.wheelhouse/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+*.venv
+pythonenv*
+.pyenv/
+.conda/
+.micromamba/
+
+# Tool caches
+.pytest_cache/
+pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.nox/
+.tox/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+.dmypy.json
+
+# Logs and local databases
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Editor settings
+.vscode/
+.idea/
+*.code-workspace
+.vs/
+*.iml
+*.sublime-*
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Project generated data
+codeguardian.egg-info/
+datasets/ml/
+datasets/normalized/
+datasets/tmp/
+Detection and Vulnerability CODEGUARDIAN/
+models/
+report/

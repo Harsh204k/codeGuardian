@@ -1,0 +1,6 @@
+﻿*/.git/*
+*/node_modules/*
+*/build/*
+*/dist/*
+*/venv/*
+*/.venv/*

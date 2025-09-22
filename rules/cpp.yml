@@ -1,0 +1,24 @@
+﻿rules:
+  - id: CPP-BO-STRCPY
+    name: "Unsafe strcpy/sprintf/gets (buffer overflow risk)"
+    pattern: "(?m)\\b(strcpy|sprintf|gets)\\s*\\("
+    cwe: "CWE-120"
+    owasp: "â€”"
+    severity: "CRITICAL"
+    confidence: 0.9
+    why: "Unbounded copy into fixed buffers can overflow."
+    fix:
+      type: "suggest"
+      message: "Use strncpy/snprintf with bounds or safer wrappers."
+
+  - id: CPP-FMT-001
+    name: "Format string vulnerability"
+    pattern: "(?m)printf\\s*\\(\\s*\\w+\\s*\\)"
+    cwe: "CWE-134"
+    owasp: "â€”"
+    severity: "HIGH"
+    confidence: 0.75
+    why: "User-controlled format strings can lead to memory disclosure/RCE."
+    fix:
+      type: "suggest"
+      message: "Use constant format string; never pass user input as format."

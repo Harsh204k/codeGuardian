@@ -1,0 +1,25 @@
+﻿rules:
+  - id: PY-CMDI-001
+    name: "Command Injection via subprocess(shell=True)"
+    pattern: "(?m)subprocess\\.(run|Popen|call)\\(.*shell\\s*=\\s*True"
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "shell=True with untrusted input enables command execution."
+    fix:
+      type: "replace"
+      message: "Avoid shell=True. Use list argv and shlex.quote on inputs."
+      replace_hint: "shell=False"
+
+  - id: PY-DESER-001
+    name: "Insecure deserialization via pickle.load/loads"
+    pattern: "(?m)pickle\\.(loads|load)\\("
+    cwe: "CWE-502"
+    owasp: "A08:2021-Software and Data Integrity Failures"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "Untrusted pickle can execute arbitrary code."
+    fix:
+      type: "suggest"
+      message: "Avoid pickle for untrusted data; prefer json or safer formats."

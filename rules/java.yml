@@ -1,0 +1,26 @@
+﻿rules:
+  - id: JAVA-SQLI-001
+    name: "SQL Injection via string concatenation"
+    pattern: "(?s)(Statement\\s+\\w+|createStatement\\(\\)).*\".*\"\\s*\\+\\s*\\w+"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Concatenating user input into SQL enables injection."
+    fix:
+      type: "suggest"
+      message: "Use PreparedStatement with parameters."
+
+  - id: JAVA-CMDI-001
+    name: "Command exec via Runtime.exec"
+    pattern: "(?m)Runtime\\.getRuntime\\(\\)\\.exec\\("
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Executing commands with tainted args can lead to RCE."
+    fix:
+      type: "suggest"
+      message: "Validate/escape arguments or avoid shell execution."
+
+

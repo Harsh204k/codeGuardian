@@ -1,0 +1,11 @@
+id: JAVA.CWE295.TLS.BYPASS
+name: Trust-all TLS or disabled hostname verification
+cwe: CWE-295
+owasp: A02:2021-Cryptographic Failures
+severity: high
+languages: [java]
+patterns:
+  - 'new\s+HostnameVerifier\s*\(\)\s*\{\s*public\s+boolean\s+verify\s*\(.*\)\s*\{\s*return\s+true\s*;'
+  - 'implements\s+X509TrustManager'
+  - 'checkServerTrusted\s*\(\s*.*\)\s*\{\s*\}'   # empty trust check
+  - 'TrustAll(HostnameVerifier|Manager)'
