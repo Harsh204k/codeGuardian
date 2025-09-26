@@ -198,7 +198,8 @@ class MultiLanguageAnalyzer:
             )
             return results
 
-        # Find all supported files
+        # Find all supported files, but exclude large or irrelevant directories such as
+        # virtualenvs, git metadata, datasets, build outputs, and node_modules.
         supported_extensions = {
             ".py",
             ".cpp",
@@ -220,9 +221,43 @@ class MultiLanguageAnalyzer:
             ".go",
         }
 
+        ignore_dirs = {
+            ".venv",
+            "venv",
+            ".git",
+            "node_modules",
+            "reports",
+            # "datasets",
+            "build",
+            "dist",
+            "__pycache__",
+            ".pytest_cache",
+        }
+
         files_to_analyze = []
-        for ext in supported_extensions:
-            files_to_analyze.extend(directory.rglob(f"*{ext}"))
+        # Walk the tree but skip ignored directories
+        for path in directory.rglob("**/*"):
+            try:
+                if not path.exists():
+                    continue
+                # skip directories
+                if path.is_dir():
+                    # if any part of the path is in ignore list, skip this directory (and its children)
+                    if any(part in ignore_dirs for part in path.parts):
+                        # skip descending into this directory by continuing
+                        continue
+                    else:
+                        continue
+
+                # skip files under ignored directories
+                if any(part in ignore_dirs for part in path.parts):
+                    continue
+
+                if path.suffix.lower() in supported_extensions:
+                    files_to_analyze.append(path)
+            except Exception:
+                # be defensive: skip any path we cannot stat
+                continue
 
         results["total_files"] = len(files_to_analyze)
 

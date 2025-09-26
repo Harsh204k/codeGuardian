@@ -6,7 +6,7 @@
 function codeInjection() {
     var userInput = prompt("Enter code:");
     eval(userInput);  // VULNERABLE: eval with user input
-    
+
     var func = new Function(userInput);  // VULNERABLE: Function constructor
     func();
 }
@@ -15,7 +15,7 @@ function codeInjection() {
 function xssVulnerability() {
     var name = document.getElementById('name').value;
     document.getElementById('output').innerHTML = "Hello " + name;  // VULNERABLE: XSS via innerHTML
-    
+
     var msg = location.hash.substr(1);
     document.write(msg);  // VULNERABLE: document.write with untrusted data
 }
@@ -55,7 +55,7 @@ function unsafeDeserialization() {
 function javascriptUrl() {
     var userUrl = prompt("Enter URL:");
     window.open("javascript:" + userUrl);  // VULNERABLE: JavaScript URL
-    
+
     document.getElementById('link').href = "javascript:" + userUrl;  // VULNERABLE: JavaScript in href
 }
 
@@ -76,13 +76,13 @@ function dynamicRequire() {
 // CWE-79: DOM manipulation vulnerabilities
 function domManipulation() {
     var userInput = document.getElementById('userInput').value;
-    
+
     // VULNERABLE: outerHTML concatenation
     document.getElementById('container').outerHTML = '<div>' + userInput + '</div>';
-    
+
     // VULNERABLE: insertAdjacentHTML with user input
     document.body.insertAdjacentHTML('beforeend', userInput);
-    
+
     // VULNERABLE: dynamic location.href
     location.href = 'http://example.com/' + userInput;
 }

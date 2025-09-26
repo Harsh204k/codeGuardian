@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import dataclass, asdict
+from engine.analyzers import normalize
 
 
 @dataclass
@@ -424,7 +425,11 @@ def main():
         sys.exit(1)
 
     result = analyze_php_file(target_path, app_name)
-    print(json.dumps(result, indent=2))
+    try:
+        normalized = normalize.normalize_result(result)
+        print(json.dumps(normalized, indent=2))
+    except Exception:
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

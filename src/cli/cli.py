@@ -188,8 +188,8 @@ def format_results(results: List[Dict], output_format: str) -> str:
                     "tool": {
                         "driver": {
                             "name": "CodeGuardian",
-                            "version": "2.0",
-                            "informationUri": "https://github.com/your-org/codeguardian",
+                            "version": "1.0",
+                            "informationUri": "https://github.com/Harsh204k/codeGuardian",
                         }
                     },
                     "results": [],

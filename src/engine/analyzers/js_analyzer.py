@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import dataclass, asdict
+from engine.analyzers import normalize
 
 
 @dataclass
@@ -241,10 +242,12 @@ def run_eslint_analysis(file_path: str, app_name: str = "App") -> List[Finding]:
     findings = []
 
     try:
-        # Try to run ESLint with security plugin
+        # Try to run ESLint with Node.js runtime directly
         cmd = [
-            "npx",
-            "eslint",
+            "node",
+            "tools/js/node_modules/eslint/bin/eslint.js",  # Path to the ESLint JavaScript file
+            "--config",
+            "tools/js/eslint.config.mjs",  # Explicitly specify the config file
             "--format",
             "json",
             "--ext",
@@ -403,7 +406,11 @@ def main():
         sys.exit(1)
 
     result = analyze_js_file(target_path, app_name)
-    print(json.dumps(result, indent=2))
+    try:
+        normalized = normalize.normalize_result(result)
+        print(json.dumps(normalized, indent=2))
+    except Exception:
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

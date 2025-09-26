@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import dataclass, asdict
+from engine.analyzers import normalize
 
 
 @dataclass
@@ -135,10 +136,26 @@ def run_cppcheck_analysis(file_path: str, app_name: str = "App") -> List[Finding
     """
     findings = []
 
+
+    import platform
+    from shutil import which
+    cppcheck_cmd = "cppcheck"
+    # Try to find cppcheck in PATH
+    if which("cppcheck") is None:
+        # Try tools/cppcheck/cppcheck.exe
+        local_tool = str(Path(__file__).parent.parent.parent / ".." / "tools" / "cppcheck" / "cppcheck.exe")
+        if Path(local_tool).exists():
+            cppcheck_cmd = local_tool
+        else:
+            # Try C:\Program Files\Cppcheck\cppcheck.exe
+            pf_tool = r"C:\\Program Files\\Cppcheck\\cppcheck.exe"
+            if Path(pf_tool).exists():
+                cppcheck_cmd = pf_tool
+
     try:
         # Run cppcheck with XML output
         cmd = [
-            "cppcheck",
+            cppcheck_cmd,
             "--xml",
             "--xml-version=2",
             "--enable=warning,style,performance,portability,information,missingInclude",
@@ -149,7 +166,7 @@ def run_cppcheck_analysis(file_path: str, app_name: str = "App") -> List[Finding
             file_path,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, shell=True if platform.system().lower() == "windows" else False)
 
         if result.returncode != 0 and not result.stderr:
             print(
@@ -274,7 +291,11 @@ def main():
         sys.exit(1)
 
     result = analyze_cpp_file(target_path, app_name)
-    print(json.dumps(result, indent=2))
+    try:
+        normalized = normalize.normalize_result(result)
+        print(json.dumps(normalized, indent=2))
+    except Exception:
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

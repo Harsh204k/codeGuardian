@@ -42,6 +42,9 @@ pythonenv*
 .pipenv/
 Pipfile.lock
 
+# Static Analysis Tools and Binaries
+/tools/
+
 # Development Tools & Caches
 # -----------------------------------------------------------------------------
 .pytest_cache/
@@ -237,5 +240,5 @@ HYBRID_*.md
 !demos/
 !rules/
 !engine/
-!tools/
+# !tools/
 !tests/

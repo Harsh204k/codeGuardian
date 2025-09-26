@@ -63,19 +63,34 @@ def run_spotbugs_analysis(file_path: str, app_name: str = "App") -> List[Finding
     """
     findings = []
 
+
+    # Try to find spotbugs in PATH or use tools/spotbugs/bin/spotbugs.bat (Windows)
+    import platform
+    spotbugs_cmd = "spotbugs"
     try:
-        # Check if spotbugs is available
-        result = subprocess.run(
-            ["spotbugs", "--version"], capture_output=True, text=True, timeout=10
-        )
-
+        result = subprocess.run([spotbugs_cmd, "--version"], capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
-            print("Warning: SpotBugs not found. Install with: apt-get install spotbugs")
-            return findings
-
+            raise FileNotFoundError
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        print("Warning: SpotBugs not available. Install with: apt-get install spotbugs")
-        return findings
+        # Try fallback for Windows
+        if platform.system().lower() == "windows":
+            fallback = str(Path(__file__).parent.parent.parent / ".." / "tools" / "spotbugs" / "bin" / "spotbugs.bat")
+            if Path(fallback).exists():
+                spotbugs_cmd = fallback
+                try:
+                    result = subprocess.run([spotbugs_cmd, "--version"], capture_output=True, text=True, timeout=10, shell=True)
+                    if result.returncode != 0:
+                        print("Warning: SpotBugs not found. Please check tools/spotbugs/bin/spotbugs.bat")
+                        return findings
+                except Exception:
+                    print("Warning: SpotBugs not available. Please check tools/spotbugs/bin/spotbugs.bat")
+                    return findings
+            else:
+                print("Warning: SpotBugs not found. Please check tools/spotbugs/bin/spotbugs.bat")
+                return findings
+        else:
+            print("Warning: SpotBugs not available. Install with: apt-get install spotbugs")
+            return findings
 
     try:
         # Create temporary directory for analysis
@@ -105,7 +120,7 @@ def run_spotbugs_analysis(file_path: str, app_name: str = "App") -> List[Finding
                 # Run SpotBugs on the compiled class
                 spotbugs_result = subprocess.run(
                     [
-                        "spotbugs",
+                        spotbugs_cmd,
                         "-textui",
                         "-low",
                         "-xml:withMessages",
@@ -116,6 +131,7 @@ def run_spotbugs_analysis(file_path: str, app_name: str = "App") -> List[Finding
                     capture_output=True,
                     text=True,
                     timeout=60,
+                    shell=True if platform.system().lower() == "windows" else False,
                 )
 
                 if spotbugs_result.returncode == 0:
@@ -130,7 +146,7 @@ def run_spotbugs_analysis(file_path: str, app_name: str = "App") -> List[Finding
                 # Assume it's already a compiled .class file
                 spotbugs_result = subprocess.run(
                     [
-                        "spotbugs",
+                        spotbugs_cmd,
                         "-textui",
                         "-low",
                         "-xml:withMessages",
@@ -141,6 +157,7 @@ def run_spotbugs_analysis(file_path: str, app_name: str = "App") -> List[Finding
                     capture_output=True,
                     text=True,
                     timeout=60,
+                    shell=True if platform.system().lower() == "windows" else False,
                 )
 
                 if spotbugs_result.returncode == 0:
