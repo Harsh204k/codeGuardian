@@ -1,8 +1,13 @@
 ﻿import yaml, pathlib
 
+
 def load_rules(langs: str):
     base = pathlib.Path(__file__).parent.parent / "rules"
-    lang_list = ["python","java","cpp","csharp","php"] if langs=="auto" else [x.strip() for x in langs.split(",")]
+    lang_list = (
+        ["python", "java", "cpp", "csharp", "php", "javascript", "go"]
+        if langs == "auto"
+        else [x.strip() for x in langs.split(",")]
+    )
     all_rules = []
     for lang in lang_list:
         f = base / f"{lang}.yml"

@@ -23,7 +23,7 @@ def norm_lang_from_filename(fname: str):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv_dir", required=True, help="folder that has data_Python.csv etc.")
+    ap.add_argument("--csv_dir", required=True, help="folder that has raw_python_samples.csv etc.")
     ap.add_argument("--out_root", default="datasets/normalized/zenodo")
     ap.add_argument("--limit", type=int, default=0, help="optional cap for quick runs")
     args = ap.parse_args()

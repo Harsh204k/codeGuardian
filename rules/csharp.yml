@@ -1,0 +1,88 @@
+rules:
+  - id: CS-SQLI-001
+    name: "SQL Injection via string concatenation"
+    pattern: "(?s)Sql(Command|DataAdapter)\\s*\\(\\s*\".*\"\\s*\\+\\s*\\w+"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "String-built SQL with user input enables injection."
+    fix:
+      type: "suggest"
+      message: "Use parameterized queries (SqlParameter)."
+
+  - id: CS-DESER-001
+    name: "Insecure deserialization (BinaryFormatter)"
+    pattern: "(?m)new\\s+BinaryFormatter\\s*\\("
+    cwe: "CWE-502"
+    owasp: "A08:2021-Software and Data Integrity Failures"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "BinaryFormatter is unsafe with untrusted input."
+    fix:
+      type: "suggest"
+      message: "Use safe serializers (System.Text.Json/DataContractJsonSerializer)."
+
+  # ===== COMMAND INJECTION (CWE-78) =====
+  - id: CS-CMDI-001
+    name: "Command injection via Process.Start"
+    pattern: "(?s)Process\\.Start\\s*\\([^)]*\\+[^)]*\\)"
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "User input in Process.Start enables command injection."
+    fix:
+      type: "suggest"
+      message: "Validate input and use ProcessStartInfo with arguments array."
+
+  # ===== XSS (CWE-79) =====
+  - id: CS-XSS-001
+    name: "XSS via Response.Write"
+    pattern: "(?s)Response\\.Write\\s*\\([^)]*\\+[^)]*\\)"
+    cwe: "CWE-79"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Unescaped user input in Response.Write enables XSS."
+    fix:
+      type: "suggest"
+      message: "Use HttpUtility.HtmlEncode() before output."
+
+  # ===== PATH TRAVERSAL (CWE-22) =====
+  - id: CS-PATH-001
+    name: "Path traversal via File operations"
+    pattern: "(?s)File\\.(ReadAllText|WriteAllText|Delete)\\s*\\([^)]*\\+[^)]*\\)"
+    cwe: "CWE-22"
+    owasp: "A01:2021-Broken Access Control"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "User input in file paths enables directory traversal."
+    fix:
+      type: "suggest"
+      message: "Validate paths using Path.Combine() and allowlists."
+
+  # ===== HARDCODED CREDENTIALS (CWE-798) =====
+  - id: CS-SECRET-001
+    name: "Hardcoded password"
+    pattern: "(?i)(password|pwd)\\s*=\\s*[\"'][^\"']{8,}[\"']"
+    cwe: "CWE-798"
+    owasp: "A07:2021-Identification and Authentication Failures"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Hardcoded passwords are security risks."
+    fix:
+      type: "suggest"
+      message: "Use configuration files or Azure Key Vault."
+
+  - id: CS-SECRET-002
+    name: "Hardcoded API key"
+    pattern: "(?i)(api_?key|access_?key)\\s*=\\s*[\"'][a-zA-Z0-9]{20,}[\"']"
+    cwe: "CWE-798"
+    owasp: "A07:2021-Identification and Authentication Failures"
+    severity: "MEDIUM"
+    confidence: 0.85
+    why: "Hardcoded API keys should be externalized."
+    fix:
+      type: "suggest"
+      message: "Use environment variables or secure key management."

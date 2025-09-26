@@ -159,11 +159,13 @@ def run_hackathon_evaluation(test_path, profile="balanced", ground_truth=None):
     }
 
 import os, re
+
+
 def _canon(p: str) -> str:
     if not p:
         return ""
-    p = re.sub(r"^file:/+","", p)   # drop file:///
-    p = unquote(p)                  # <= decode %20 etc.
+    p = re.sub(r"^file:/+", "", p)  # drop file:///
+    p = unquote(p)  # <= decode %20 etc.
     p = p.replace("/", "\\")
     try:
         p = str(pathlib.Path(p).resolve(strict=False))
@@ -174,21 +176,27 @@ def _canon(p: str) -> str:
 
 def load_gt(path):
     for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-        if not line.strip(): continue
+        if not line.strip():
+            continue
         yield json.loads(line)
+
 
 def k_loc_of_files(files):
     total_lines = 0
     for _, p in files:
         try:
-            total_lines += len(p.read_text(encoding="utf-8", errors="ignore").splitlines())
+            total_lines += len(
+                p.read_text(encoding="utf-8", errors="ignore").splitlines()
+            )
         except Exception:
             pass
     return max(1, total_lines) / 1000.0
 
+
 def cwe_from_message(msg: str):
     m = re.search(r"(CWE-\d+)", msg or "")
     return m.group(1) if m else ""
+
 
 def index_preds_sarif(sarif_path):
     p = pathlib.Path(sarif_path)
@@ -202,10 +210,14 @@ def index_preds_sarif(sarif_path):
     def resolve_uri(raw_uri: str, uri_base_id: str | None, run: dict) -> str:
         if not raw_uri:
             return ""
-        base_ids = (run.get("originalUriBaseIds") or {})
+        base_ids = run.get("originalUriBaseIds") or {}
         if uri_base_id and uri_base_id in base_ids:
             base_uri = (base_ids[uri_base_id] or {}).get("uri") or ""
-            if base_uri and not re.match(r"^[a-zA-Z]:[\\/]", raw_uri) and not raw_uri.startswith("file:"):
+            if (
+                base_uri
+                and not re.match(r"^[a-zA-Z]:[\\/]", raw_uri)
+                and not raw_uri.startswith("file:")
+            ):
                 # join base + relative
                 sep = "/" if not base_uri.endswith(("/", "\\")) else ""
                 raw_uri = f"{base_uri}{sep}{raw_uri}"
@@ -228,7 +240,9 @@ def index_preds_sarif(sarif_path):
                 if not uri and "index" in art:
                     try:
                         idx = int(art["index"])
-                        uri = ((artifacts[idx] or {}).get("location") or {}).get("uri") or ""
+                        uri = ((artifacts[idx] or {}).get("location") or {}).get(
+                            "uri"
+                        ) or ""
                     except Exception:
                         uri = ""
 
@@ -271,7 +285,11 @@ def evaluate(gt_path, results_sarif, line_window=5):
                 if matched[i]:
                     continue
                 pline = int(p.get("line") or 0)
-                line_ok = True if gline is None or pline == 0 else abs(pline - int(gline)) <= line_window
+                line_ok = (
+                    True
+                    if gline is None or pline == 0
+                    else abs(pline - int(gline)) <= line_window
+                )
                 if line_ok:
                     matched[i] = True
                     TP += 1
@@ -291,7 +309,11 @@ def evaluate(gt_path, results_sarif, line_window=5):
                 if matched_c[i]:
                     continue
                 pline = int(p.get("line") or 0)
-                line_ok = True if gline is None or pline == 0 else abs(pline - int(gline)) <= line_window
+                line_ok = (
+                    True
+                    if gline is None or pline == 0
+                    else abs(pline - int(gline)) <= line_window
+                )
                 cwe_ok = (not gcwe) or (p.get("cwe") == gcwe)
                 if line_ok and cwe_ok:
                     matched_c[i] = True
@@ -304,50 +326,69 @@ def evaluate(gt_path, results_sarif, line_window=5):
 
     def _prf(tp, fp, fn):
         precision = tp / (tp + fp) if (tp + fp) else 0.0
-        recall    = tp / (tp + fn) if (tp + fn) else 0.0
-        f1        = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall)
+            else 0.0
+        )
         return precision, recall, f1
 
     precision, recall, f1 = _prf(TP, FP, FN)
     precision_cwe, recall_cwe, f1_cwe = _prf(TP_cwe, FP_cwe, FN_cwe)
 
     return {
-        "TP": TP, "FP": FP, "FN": FN,
-        "precision": precision, "recall": recall, "f1": f1,
-        "TP_cwe": TP_cwe, "FP_cwe": FP_cwe, "FN_cwe": FN_cwe,
-        "precision_cwe": precision_cwe, "recall_cwe": recall_cwe, "f1_cwe": f1_cwe,
+        "TP": TP,
+        "FP": FP,
+        "FN": FN,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "TP_cwe": TP_cwe,
+        "FP_cwe": FP_cwe,
+        "FN_cwe": FN_cwe,
+        "precision_cwe": precision_cwe,
+        "recall_cwe": recall_cwe,
+        "f1_cwe": f1_cwe,
     }
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gt", required=True, help="ground_truth.jsonl")
-    ap.add_argument("--scan-path", help="(recommended) scan this path now for timing & SARIF")
+    ap.add_argument(
+        "--scan-path", help="(recommended) scan this path now for timing & SARIF"
+    )
     ap.add_argument("--langs", default="auto")
     ap.add_argument("--out", default="report")
     ap.add_argument("--line-window", type=int, default=5)
     args = ap.parse_args()
 
-    out_dir = pathlib.Path(args.out); out_dir.mkdir(parents=True, exist_ok=True)
-    sarif_path = out_dir / "results.sarif"
+    out_dir = pathlib.Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sarif_path = out_dir / "latest_results.sarif"
 
     if args.scan_path:
         files = collect_files(args.scan_path, args.langs)
         rules = load_rules(args.langs)
         t0 = time.time()
         findings = scan_files(files, rules, profile="balanced", appname="EvalRun")
-        dt = (time.time()-t0)
+        dt = time.time() - t0
         export_sarif(findings, sarif_path)
-        ms_per_kloc = (dt*1000)/k_loc_of_files(files)
+        ms_per_kloc = (dt * 1000) / k_loc_of_files(files)
     else:
         ms_per_kloc = None
 
     metrics = evaluate(args.gt, sarif_path, args.line_window)
-    if ms_per_kloc is not None: metrics["ms_per_kloc"] = ms_per_kloc
-    (out_dir/"metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    if ms_per_kloc is not None:
+        metrics["ms_per_kloc"] = ms_per_kloc
+    (out_dir / "metrics.json").write_text(
+        json.dumps(metrics, indent=2), encoding="utf-8"
+    )
     print("== EVAL ==")
     print(json.dumps(metrics, indent=2))
     print(f"Wrote {out_dir/'metrics.json'}")
+
 
 if __name__ == "__main__":
     main()

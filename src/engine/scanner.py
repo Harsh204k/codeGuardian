@@ -45,19 +45,27 @@ def _ml_threshold_from_env() -> float:
         return 0.35
 
 
-def scan_files(files, rules, profile: str = "balanced", appname: str = "App") -> List[Finding]:
+def scan_files(
+    files,
+    rules,
+    profile: str = "balanced",
+    appname: str = "App",
+    use_external_analyzers: bool = True,
+) -> List[Finding]:
     """
-    Main rule-based scanner.
+    Main rule-based scanner with optional external analyzer integration.
     - Walks given (language, pathlib.Path) pairs.
     - Applies regex patterns from rules.
     - Creates Finding objects.
     - Optionally applies ML reranker if models/reranker_*.joblib exists.
+    - Can integrate external static analysis tools for enhanced detection.
     """
     results: List[Finding] = []
 
     # confidence profile nudge
     prof_boost = {"strict": +0.05, "balanced": 0.0, "relaxed": -0.05}.get(profile, 0.0)
 
+    # First run the traditional rule-based analysis
     for lang, path in files:
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -103,6 +111,41 @@ def scan_files(files, rules, profile: str = "balanced", appname: str = "App") ->
                         quickfix=r.get("fix"),
                     )
                 )
+
+    # === OPTIONAL: External static analyzers integration ===
+    if use_external_analyzers:
+        try:
+            from .analyzers.multi_analyzer import MultiLanguageAnalyzer
+
+            analyzer = MultiLanguageAnalyzer()
+
+            # Run external analyzers on each file
+            for lang, path in files:
+                try:
+                    analysis_result = analyzer.analyze_file(str(path), appname)
+                    external_findings = analyzer._convert_single_file_findings(
+                        analysis_result
+                    )
+
+                    # Apply profile boost to external findings too
+                    for finding in external_findings:
+                        finding.confidence = max(
+                            0.0, min(1.0, finding.confidence + prof_boost)
+                        )
+
+                    results.extend(external_findings)
+
+                except Exception as e:
+                    # If external analyzer fails, continue with rule-based results
+                    print(f"Warning: External analyzer failed for {path}: {e}")
+                    continue
+
+        except ImportError:
+            print(
+                "Warning: External analyzers not available, using rule-based analysis only"
+            )
+        except Exception as e:
+            print(f"Warning: External analyzer integration failed: {e}")
 
     # === OPTIONAL: ML reranker (filters/reranks findings) ===
     # If models/reranker_java.joblib (or generic) exists and engine/ml_reranker.py is present,
@@ -166,3 +209,55 @@ def _extract_function_name(content: str, line_num: int, language: str) -> str:
                 return match.group(1)
 
     return "main" if language in ["java", "cpp", "csharp"] else "module_level"
+def scan_files_external_only(
+    files, profile: str = "balanced", appname: str = "App"
+) -> List[Finding]:
+    """
+    Scanner that uses only external static analysis tools (no rule-based scanning).
+    Useful for comparing external tool results with rule-based results.
+    """
+    results: List[Finding] = []
+    prof_boost = {"strict": +0.05, "balanced": 0.0, "relaxed": -0.05}.get(profile, 0.0)
+
+    try:
+        from .analyzers.multi_analyzer import MultiLanguageAnalyzer
+
+        analyzer = MultiLanguageAnalyzer()
+
+        # Run external analyzers on each file
+        for lang, path in files:
+            try:
+                analysis_result = analyzer.analyze_file(str(path), appname)
+                external_findings = analyzer._convert_single_file_findings(
+                    analysis_result
+                )
+
+                # Apply profile boost
+                for finding in external_findings:
+                    finding.confidence = max(
+                        0.0, min(1.0, finding.confidence + prof_boost)
+                    )
+
+                results.extend(external_findings)
+
+            except Exception as e:
+                print(f"Warning: External analyzer failed for {path}: {e}")
+                continue
+
+    except ImportError:
+        print("Error: External analyzers not available")
+        return []
+    except Exception as e:
+        print(f"Error: External analyzer integration failed: {e}")
+        return []
+
+    # Apply ML reranker if available
+    try:
+        from .ml_reranker import score_findings  # type: ignore
+
+        threshold = _ml_threshold_from_env()
+        results = score_findings(results, threshold=threshold)
+    except Exception:
+        pass
+
+    return results

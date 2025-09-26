@@ -1,0 +1,438 @@
+rules:
+  # ===== COMMAND INJECTION (CWE-78) =====
+  - id: PY-CMDI-001
+    name: "Command Injection via subprocess(shell=True)"
+    pattern: "(?m)subprocess\\.(run|Popen|call|check_output)\\([^)]*shell\\s*=\\s*True"
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "shell=True with untrusted input enables command execution."
+    fix:
+      type: "replace"
+      message: "Avoid shell=True. Use list argv and shlex.quote on inputs."
+      replace_hint: "shell=False"
+
+  - id: PY-CMDI-002
+    name: "Command Injection via os.system"
+    pattern: "(?m)os\\.system\\s*\\("
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "os.system() is inherently unsafe for user input."
+    fix:
+      type: "suggest"
+      message: "Use subprocess with list arguments instead of os.system."
+
+  - id: PY-CMDI-003
+    name: "Command Injection via os.popen"
+    pattern: "(?m)os\\.popen\\s*\\("
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "os.popen() can execute arbitrary shell commands."
+    fix:
+      type: "suggest"
+      message: "Use subprocess.run() with shell=False."
+
+  - id: PY-CMDI-004
+    name: "Command Injection via eval with user input"
+    pattern: "(?s)eval\\s*\\([^)]*?(input\\(|request\\.|flask\\.request|request\\.form|request\\.args)"
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "CRITICAL"
+    confidence: 0.95
+    why: "eval() with user input can execute arbitrary Python code."
+    fix:
+      type: "suggest"
+      message: "Never use eval() with user input. Use ast.literal_eval() for safe evaluation."
+
+  - id: PY-CMDI-005
+    name: "Code Injection via exec"
+    pattern: "(?s)exec\\s*\\([^)]*?(input\\(|request\\.|flask\\.request|request\\.form|request\\.args)"
+    cwe: "CWE-94"
+    owasp: "A03:2021-Injection"
+    severity: "CRITICAL"
+    confidence: 0.95
+    why: "exec() with user input enables arbitrary code execution."
+    fix:
+      type: "suggest"
+      message: "Remove exec() calls with user input. Use safer alternatives."
+
+  # ===== DESERIALIZATION (CWE-502) =====
+  - id: PY-DESER-001
+    name: "Insecure deserialization via pickle.load/loads"
+    pattern: "(?m)pickle\\.(loads|load)\\("
+    cwe: "CWE-502"
+    owasp: "A08:2021-Software and Data Integrity Failures"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "Untrusted pickle can execute arbitrary code during deserialization."
+    fix:
+      type: "suggest"
+      message: "Avoid pickle for untrusted data; prefer json or safer formats."
+
+  - id: PY-DESER-002
+    name: "Insecure deserialization via marshal.load"
+    pattern: "(?m)marshal\\.(loads|load)\\("
+    cwe: "CWE-502"
+    owasp: "A08:2021-Software and Data Integrity Failures"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "marshal module can execute arbitrary code during deserialization."
+    fix:
+      type: "suggest"
+      message: "Use json or other safe serialization formats."
+
+  # ===== SQL INJECTION (CWE-89) =====
+  - id: PY-SQLI-001
+    name: "SQL Injection via string formatting"
+    pattern: "(?s)(execute|executemany)\\s*\\(\\s*['\"].*?%[sd].*?['\"]\\s*%"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "String formatting in SQL queries enables injection attacks."
+    fix:
+      type: "suggest"
+      message: "Use parameterized queries with ? placeholders."
+
+  - id: PY-SQLI-002
+    name: "SQL Injection via f-string"
+    pattern: "(?s)(execute|executemany)\\s*\\(\\s*f['\"].*?\\{.*?\\}.*?['\"]"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "f-strings in SQL queries can lead to injection vulnerabilities."
+    fix:
+      type: "suggest"
+      message: "Use parameterized queries instead of f-strings."
+
+  - id: PY-SQLI-003
+    name: "SQL Injection via string concatenation"
+    pattern: "(?s)(execute|executemany)\\s*\\(\\s*['\"][^'\"]*['\"]\\s*\\+.*?(request\\.|input\\(|flask\\.request)"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "String concatenation with user input in SQL queries."
+    fix:
+      type: "suggest"
+      message: "Use parameterized queries with execute(sql, params)."
+
+  - id: PY-SQLI-004
+    name: "SQL Injection via f-string in query variable"
+    pattern: "(?m).*=\\s*f['\"]\\s*SELECT\\s+.*?\\{.*?\\}.*?['\"]"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "f-strings with user data in SQL queries enable injection attacks."
+    fix:
+      type: "suggest"
+      message: "Use parameterized queries with proper placeholders."
+
+  - id: PY-SQLI-005
+    name: "SQL Injection via string formatting in query variable"
+    pattern: "(?m).*=\\s*['\"]\\s*SELECT\\s+.*?%[sd].*?['\"]\\s*%"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "String formatting in SQL query variables enables injection."
+    fix:
+      type: "suggest"
+      message: "Use parameterized queries instead of string formatting."
+
+  # ===== PATH TRAVERSAL (CWE-22) =====
+  - id: PY-PATH-001
+    name: "Path Traversal via open() with user input"
+    pattern: "(?s)open\\s*\\([^)]*?(request\\.|input\\(|flask\\.request|request\\.form|request\\.args)"
+    cwe: "CWE-22"
+    owasp: "A01:2021-Broken Access Control"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "Opening files with user-controlled paths enables directory traversal."
+    fix:
+      type: "suggest"
+      message: "Validate file paths and use os.path.join() with base directory checks."
+
+  - id: PY-PATH-002
+    name: "Path Traversal via file operations"
+    pattern: "(?s)(os\\.remove|os\\.unlink|os\\.rmdir|shutil\\.rmtree)\\s*\\([^)]*?(request\\.|input\\(|flask\\.request)"
+    cwe: "CWE-22"
+    owasp: "A01:2021-Broken Access Control"
+    severity: "CRITICAL"
+    confidence: 0.9
+    why: "File deletion with user input can lead to unauthorized file access."
+    fix:
+      type: "suggest"
+      message: "Implement strict path validation and use allowlists."
+
+  # ===== XSS (CWE-79) =====
+  - id: PY-XSS-001
+    name: "XSS via Flask render_template_string"
+    pattern: "(?s)render_template_string\\s*\\([^)]*?(request\\.|flask\\.request|request\\.form|request\\.args)"
+    cwe: "CWE-79"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "Rendering user input as templates enables XSS and SSTI."
+    fix:
+      type: "suggest"
+      message: "Use render_template() with safe templates and escape user data."
+
+  - id: PY-XSS-002
+    name: "XSS via Django mark_safe with user input"
+    pattern: "(?s)mark_safe\\s*\\([^)]*?(request\\.|request\\.GET|request\\.POST)"
+    cwe: "CWE-79"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.95
+    why: "mark_safe() bypasses XSS protection for user input."
+    fix:
+      type: "suggest"
+      message: "Remove mark_safe() and let Django handle escaping."
+
+  - id: PY-XSS-003
+    name: "XSS via direct HTML return with user input"
+    pattern: "(?m)return\\s+f['\"].*<.*\\{.*query.*\\}.*['\"]"
+    cwe: "CWE-79"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "Returning HTML with unescaped user input enables XSS attacks."
+    fix:
+      type: "suggest"
+      message: "Escape user input using html.escape() or use templates."
+
+  - id: PY-XSS-004
+    name: "XSS via response write with user input"
+    pattern: "(?s)(response\\.write|print)\\s*\\([^)]*?<[^>]*>.*?(request\\.|input\\(|flask\\.request|request\\.form|request\\.args)"
+    cwe: "CWE-79"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "Writing HTML with unescaped user input to response enables XSS."
+    fix:
+      type: "suggest"
+      message: "Escape user input before writing to response."
+
+  # ===== AUTHENTICATION & SESSION MANAGEMENT (CWE-287, CWE-384) =====
+  - id: PY-AUTH-001
+    name: "Weak authentication - no password verification"
+    pattern: "(?m)if\\s+username\\s*==.*and\\s+password\\s*=="
+    cwe: "CWE-287"
+    owasp: "A07:2021-Identification and Authentication Failures"
+    severity: "HIGH"
+    confidence: 0.7
+    why: "Simple string comparison for authentication is insecure."
+    fix:
+      type: "suggest"
+      message: "Use secure password hashing with bcrypt or similar."
+
+  - id: PY-AUTH-002
+    name: "Session fixation vulnerability"
+    pattern: "(?m)session\\[\\s*['\"]user['\"]\\s*\\]\\s*=.*without.*regenerate"
+    cwe: "CWE-384"
+    owasp: "A07:2021-Identification and Authentication Failures"
+    severity: "MEDIUM"
+    confidence: 0.6
+    why: "Session ID should be regenerated after authentication."
+    fix:
+      type: "suggest"
+      message: "Use session.regenerate() after successful login."
+
+  # ===== INSECURE DIRECT OBJECT REFERENCE (CWE-639) =====
+  - id: PY-IDOR-001
+    name: "Insecure Direct Object Reference"
+    pattern: "(?s)\\.(get|filter)\\s*\\([^)]*id\\s*=\\s*(request\\.|input\\(|flask\\.request)"
+    cwe: "CWE-639"
+    owasp: "A01:2021-Broken Access Control"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Direct use of user-provided ID without authorization check."
+    fix:
+      type: "suggest"
+      message: "Implement proper authorization checks before object access."
+
+  # ===== SECURITY MISCONFIGURATION (CWE-732) =====
+  - id: PY-MISC-001
+    name: "Debug mode enabled in production"
+    pattern: "(?m)debug\\s*=\\s*True"
+    cwe: "CWE-732"
+    owasp: "A05:2021-Security Misconfiguration"
+    severity: "MEDIUM"
+    confidence: 0.85
+    why: "Debug mode exposes sensitive information and stack traces."
+    fix:
+      type: "suggest"
+      message: "Set debug=False in production environments."
+
+  - id: PY-MISC-002
+    name: "Insecure SSL/TLS configuration"
+    pattern: "(?m)(ssl_verify|verify)\\s*=\\s*False"
+    cwe: "CWE-295"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "Disabling SSL verification allows man-in-the-middle attacks."
+    fix:
+      type: "suggest"
+      message: "Enable SSL verification and use proper certificates."
+  - id: PY-CRYPTO-001
+    name: "Weak hashing - MD5"
+    pattern: "(?m)hashlib\\.(md5|new)\\s*\\(\\s*['\"]md5['\"]"
+    cwe: "CWE-327"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "MEDIUM"
+    confidence: 0.95
+    why: "MD5 is cryptographically broken and should not be used."
+    fix:
+      type: "replace"
+      message: "Use SHA-256 or stronger algorithm."
+      replace_hint: "hashlib.sha256"
+
+  - id: PY-CRYPTO-002
+    name: "Weak hashing - SHA1"
+    pattern: "(?m)hashlib\\.(sha1|new)\\s*\\(\\s*['\"]sha1['\"]"
+    cwe: "CWE-327"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "MEDIUM"
+    confidence: 0.9
+    why: "SHA-1 is deprecated due to collision vulnerabilities."
+    fix:
+      type: "replace"
+      message: "Use SHA-256 or stronger algorithm."
+      replace_hint: "hashlib.sha256"
+
+  # ===== HARDCODED SECRETS (CWE-798) =====
+  - id: PY-SECRET-001
+    name: "Hardcoded API key"
+    pattern: "(?i)(api_key|apikey|access_key)\\s*=\\s*[\"'][a-zA-Z0-9]{20,}[\"']"
+    cwe: "CWE-798"
+    owasp: "A07:2021-Identification and Authentication Failures"
+    severity: "MEDIUM"
+    confidence: 0.8
+    why: "Hardcoded API keys in source code are security risks."
+    fix:
+      type: "suggest"
+      message: "Use environment variables or secure key management."
+
+  - id: PY-SECRET-002
+    name: "Hardcoded password"
+    pattern: "(?i)(password|passwd|pwd)\\s*=\\s*[\"'][^\"']{8,}[\"']"
+    cwe: "CWE-798"
+    owasp: "A07:2021-Identification and Authentication Failures"
+    severity: "HIGH"
+    confidence: 0.7
+    why: "Hardcoded passwords are easily discoverable."
+    fix:
+      type: "suggest"
+      message: "Use environment variables or secure configuration."
+
+  # ===== WEAK TLS/SSL (CWE-295) =====
+  - id: PY-TLS-001
+    name: "Disabled SSL certificate verification"
+    pattern: "(?m)(verify\\s*=\\s*False|CERT_NONE)"
+    cwe: "CWE-295"
+    owasp: "A07:2021-Identification and Authentication Failures"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "Disabling SSL verification enables man-in-the-middle attacks."
+    fix:
+      type: "suggest"
+      message: "Enable SSL certificate verification or use proper CA certificates."
+
+  # ===== WEAK RANDOMNESS (CWE-330) =====
+  - id: PY-RANDOM-001
+    name: "Weak random number generation"
+    pattern: "(?m)random\\.(random|randint|choice|shuffle)\\("
+    cwe: "CWE-330"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "LOW"
+    confidence: 0.6
+    why: "random module is not cryptographically secure."
+    fix:
+      type: "suggest"
+      message: "Use secrets module for cryptographically secure randomness."
+
+  # ===== SECURITY LOGGING & MONITORING (CWE-778) =====
+  - id: PY-LOG-001
+    name: "Password logging vulnerability"
+    pattern: "(?i)log.*password.*="
+    cwe: "CWE-532"
+    owasp: "A09:2021-Security Logging and Monitoring Failures"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Passwords should never be logged."
+    fix:
+      type: "suggest"
+      message: "Remove password from log statements or mask the value."
+
+  - id: PY-LOG-002
+    name: "Missing security event logging"
+    pattern: "(?m)login.*success.*without.*log"
+    cwe: "CWE-778"
+    owasp: "A09:2021-Security Logging and Monitoring Failures"
+    severity: "MEDIUM"
+    confidence: 0.6
+    why: "Security events should be logged for monitoring."
+    fix:
+      type: "suggest"
+      message: "Add security event logging for authentication actions."
+
+  # ===== XML EXTERNAL ENTITY (CWE-611) =====
+  - id: PY-XXE-001
+    name: "XML External Entity injection"
+    pattern: "(?s)xml\\.etree\\.ElementTree\\.parse\\([^)]*\\)"
+    cwe: "CWE-611"
+    owasp: "A05:2021-Security Misconfiguration"
+    severity: "HIGH"
+    confidence: 0.75
+    why: "XML parsing without XXE protection allows file disclosure."
+    fix:
+      type: "suggest"
+      message: "Use defusedxml library or disable external entities."
+
+  # ===== SERVER-SIDE REQUEST FORGERY (CWE-918) =====
+  - id: PY-SSRF-001
+    name: "Server-side Request Forgery"
+    pattern: "(?s)requests\\.(get|post|put|delete)\\s*\\([^)]*(?:request\\.|input\\(|flask\\.request)[^)]*\\)"
+    cwe: "CWE-918"
+    owasp: "A10:2021-Server-Side Request Forgery"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "User-controlled URLs in HTTP requests enable SSRF attacks."
+    fix:
+      type: "suggest"
+      message: "Validate URLs against allowlist and restrict protocols."
+
+  # ===== INSECURE DESERIALIZATION (CWE-502) =====
+  - id: PY-DESER-001
+    name: "Insecure pickle deserialization"
+    pattern: "(?s)pickle\\.(loads?|load)\\s*\\([^)]*(?:request\\.|input\\(|flask\\.request)[^)]*\\)"
+    cwe: "CWE-502"
+    owasp: "A08:2021-Software and Data Integrity Failures"
+    severity: "CRITICAL"
+    confidence: 0.95
+    why: "Deserializing untrusted data can lead to arbitrary code execution."
+    fix:
+      type: "suggest"
+      message: "Use safe serialization formats like JSON or validate data source."
+
+  # ===== RACE CONDITIONS (CWE-362) =====
+  - id: PY-RACE-001
+    name: "Time-of-check time-of-use race condition"
+    pattern: "(?s)os\\.path\\.exists\\([^)]+\\)[^}]*open\\("
+    cwe: "CWE-362"
+    owasp: "A04:2021-Insecure Design"
+    severity: "MEDIUM"
+    confidence: 0.7
+    why: "File existence check followed by file operation creates race condition."
+    fix:
+      type: "suggest"
+      message: "Use exception handling instead of existence checks."
