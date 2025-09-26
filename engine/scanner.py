@@ -15,6 +15,7 @@ class Finding:
     file: str
     line: int
     snippet: str
+    function_name: str
     cwe: str
     owasp: str
     severity: str
@@ -79,6 +80,7 @@ def scan_files(files, rules, profile: str = "balanced", appname: str = "App") ->
             for ln in _iter_matches(text, pattern):
                 fid = str(uuid.uuid4())[:8]
                 snippet = lines[ln - 1][:240] if 0 <= ln - 1 < len(lines) else ""
+                function_name = _extract_function_name(text, ln, lang)
                 base_conf = float(r.get("confidence", 0.7))
                 conf = max(0.0, min(1.0, base_conf + prof_boost))
 
@@ -92,6 +94,7 @@ def scan_files(files, rules, profile: str = "balanced", appname: str = "App") ->
                         file=str(path),
                         line=int(ln),
                         snippet=snippet,
+                        function_name=function_name,
                         cwe=r.get("cwe", ""),
                         owasp=r.get("owasp", "-"),
                         severity=r.get("severity", "MEDIUM"),
@@ -114,3 +117,52 @@ def scan_files(files, rules, profile: str = "balanced", appname: str = "App") ->
         pass
 
     return results
+
+
+def _extract_function_name(content: str, line_num: int, language: str) -> str:
+    """
+    Extract the function name containing the given line number.
+    """
+    lines = content.splitlines()
+    if line_num <= 0 or line_num > len(lines):
+        return "unknown"
+
+    # Language-specific function patterns
+    patterns = {
+        "python": [
+            r"^\s*def\s+(\w+)\s*\(",
+            r"^\s*async\s+def\s+(\w+)\s*\(",
+            r"^\s*class\s+(\w+)[:\(]"
+        ],
+        "java": [
+            r"^\s*(?:public|private|protected|static|\s)*\s*(?:\w+\s+)*(\w+)\s*\([^)]*\)\s*\{",
+            r"^\s*(?:public|private|protected|\s)*\s*class\s+(\w+)"
+        ],
+        "php": [
+            r"^\s*function\s+(\w+)\s*\(",
+            r"^\s*(?:public|private|protected|\s)+function\s+(\w+)\s*\("
+        ],
+        "cpp": [
+            r"^\s*(?:\w+\s+)*(\w+)\s*\([^)]*\)\s*\{",
+            r"^\s*(?:class|struct)\s+(\w+)"
+        ],
+        "csharp": [
+            r"^\s*(?:public|private|protected|internal|static|\s)*\s*(?:\w+\s+)*(\w+)\s*\([^)]*\)",
+            r"^\s*(?:public|private|protected|internal|\s)*\s*class\s+(\w+)"
+        ]
+    }
+
+    lang_patterns = patterns.get(language, patterns["java"])  # Default to Java patterns
+
+    # Search backwards from the current line to find function declaration
+    for i in range(line_num - 1, max(0, line_num - 50), -1):  # Look back up to 50 lines
+        line = lines[i].rstrip()
+        if not line or line.strip().startswith(('#', '//', '/*', '*')):  # Skip comments
+            continue
+
+        for pattern in lang_patterns:
+            match = re.search(pattern, line)
+            if match:
+                return match.group(1)
+
+    return "main" if language in ["java", "cpp", "csharp"] else "module_level"

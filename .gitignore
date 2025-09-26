@@ -1,10 +1,19 @@
-﻿# Python caches and artifacts
+﻿# =============================================================================
+# CODEGUARDIAN VULNERABILITY DETECTION TOOL - GITIGNORE
+# =============================================================================
+
+# Python Runtime & Compilation
+# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.so
+*.dll
+*.dylib
 
-# Distribution / packaging
+# Python Distribution & Packaging
+# -----------------------------------------------------------------------------
 *.egg
 *.egg-info/
 .eggs/
@@ -12,8 +21,12 @@ build/
 dist/
 .wheelhouse/
 pip-wheel-metadata/
+*.whl
+*.tar.gz
+*.zip
 
-# Virtual environments
+# Virtual Environments
+# -----------------------------------------------------------------------------
 .venv/
 venv/
 env/
@@ -25,8 +38,11 @@ pythonenv*
 .pyenv/
 .conda/
 .micromamba/
+.pipenv/
+Pipfile.lock
 
-# Tool caches
+# Development Tools & Caches
+# -----------------------------------------------------------------------------
 .pytest_cache/
 pytest_cache/
 .mypy_cache/
@@ -41,31 +57,184 @@ pytest_cache/
 htmlcov/
 .cache/
 .dmypy.json
+.bandit
+.safety
 
-# Logs and local databases
-*.log
-*.sqlite
-*.sqlite3
-*.db
-
-# Editor settings
+# IDE & Editor Settings
+# -----------------------------------------------------------------------------
 .vscode/
 .idea/
 *.code-workspace
 .vs/
 *.iml
 *.sublime-*
+*.swp
+*.swo
+*~
+.emacs.d/
+.vim/
 
-# OS metadata
+# Operating System Files
+# -----------------------------------------------------------------------------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 Desktop.ini
 
-# Project generated data
+# =============================================================================
+# CODEGUARDIAN SPECIFIC FILES
+# =============================================================================
+
+# Project Build Artifacts
+# -----------------------------------------------------------------------------
 codeguardian.egg-info/
+*.spec
+*.manifest
+
+# Machine Learning Models & Training Data
+# -----------------------------------------------------------------------------
+models/
+!models/.gitkeep
+models/**/
+ml_models/
+trained_models/
+checkpoints/
+*.pkl
+*.joblib
+*.model
+*.bin
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.onnx
+*.tflite
+
+# Datasets & Training Data
+# -----------------------------------------------------------------------------
+datasets/
+!datasets/.gitkeep
 datasets/ml/
 datasets/normalized/
 datasets/tmp/
-Detection and Vulnerability CODEGUARDIAN/
-models/
+datasets/cache/
+datasets/processed/
+data/
+!data/.gitkeep
+training_data/
+test_data/
+validation_data/
+*.jsonl
+*.parquet
+DiverseVul*/
+Juliet/
+Zenodo/
+"Detection and Vulnerability CODEGUARDIAN"/
+"DiverseVul Dataset"/
+
+# Scan Results & Reports
+# -----------------------------------------------------------------------------
+*_results/
+*_test_results/
+*_scan/
+*_demo/
+*_output/
+results/
 report/
+reports/
+output/
+scan_output/
+*.sarif
+*.html
+*.xlsx
+stage1_results.*
+comprehensive_analysis/
+diversevul_test_results/
+
+# Logs & Debug Files
+# -----------------------------------------------------------------------------
+*.log
+*.log.*
+debug*.py
+debug_*.py
+monitor_*.py
+temp_*.py
+test_*.py
+simple_test.py
+*.tmp
+*.temp
+*.debug
+
+# Database Files
+# -----------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# Configuration & Secrets
+# -----------------------------------------------------------------------------
+.env
+.env.*
+secrets.json
+config.local.*
+*.key
+*.pem
+*.cert
+*.crt
+
+# Performance & Profiling
+# -----------------------------------------------------------------------------
+*.prof
+*.profile
+.prof/
+profile_results/
+
+# Jupyter Notebooks (checkpoints)
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Documentation Build
+# -----------------------------------------------------------------------------
+docs/_build/
+docs/build/
+site/
+
+# Temporary Analysis Files
+# -----------------------------------------------------------------------------
+*.analysis
+*.report
+*.summary
+IMPLEMENTATION_*.md
+OPTIMAL_*.md
+HYBRID_*.md
+
+# OS Specific Exclusions
+# -----------------------------------------------------------------------------
+# Windows
+*.lnk
+# macOS
+.AppleDouble
+.LSOverride
+# Linux
+.directory
+
+# =============================================================================
+# KEEP ESSENTIAL STRUCTURE FILES
+# =============================================================================
+!.gitkeep
+!README.md
+!requirements*.txt
+!pyproject.toml
+!setup.py
+!pytest.ini
+!demos/
+!rules/
+!engine/
+!tools/
+!tests/

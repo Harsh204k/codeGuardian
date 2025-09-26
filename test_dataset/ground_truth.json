@@ -1,0 +1,20 @@
+{
+  "test_dataset/python_vulnerabilities.py": [
+    {"line": 47, "rule_id": "PY-CMDI-001", "cwe": "CWE-78", "severity": "HIGH", "name": "Command Injection"},
+    {"line": 55, "rule_id": "PY-DESER-001", "cwe": "CWE-502", "severity": "HIGH", "name": "Insecure Deserialization"},
+    {"line": 18, "rule_id": "PY-SECRET-002", "cwe": "CWE-798", "severity": "HIGH", "name": "Hardcoded Credentials"},
+    {"line": 59, "rule_id": "PY-SECRET-002", "cwe": "CWE-798", "severity": "HIGH", "name": "Hardcoded Credentials"}
+  ],
+  "test_dataset/VulnerableJavaApp.java": [
+    {"line": 79, "rule_id": "JAVA-CRYPTO-001", "cwe": "CWE-327", "severity": "MEDIUM", "name": "Weak Cryptography"},
+    {"line": 72, "rule_id": "JAVA-RANDOM-001", "cwe": "CWE-330", "severity": "LOW", "name": "Weak Random"}
+  ],
+  "test_dataset/vulnerable_cpp.cpp": [
+    {"line": 14, "rule_id": "CPP-BO-STRCPY", "cwe": "CWE-120", "severity": "CRITICAL", "name": "Buffer Overflow"},
+    {"line": 24, "rule_id": "CPP-BO-STRCPY", "cwe": "CWE-120", "severity": "CRITICAL", "name": "Buffer Overflow"},
+    {"line": 62, "rule_id": "CPP-BO-STRCPY", "cwe": "CWE-120", "severity": "CRITICAL", "name": "Buffer Overflow"},
+    {"line": 39, "rule_id": "CPP-FMT-001", "cwe": "CWE-134", "severity": "HIGH", "name": "Format String Vulnerability"}
+  ],
+  "test_dataset/vulnerable_php.php": [
+  ]
+}

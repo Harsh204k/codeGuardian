@@ -1,0 +1,11 @@
+# Python dependencies with known CVEs
+Django==2.0.0          # CVE-2019-12308 (High severity)
+requests==2.19.1        # CVE-2018-18074 (Medium severity) 
+Flask==1.0.0           # CVE-2019-1010083 (Medium severity)
+PyYAML==6.0.2          # CVE-2020-1747 (High severity)
+Pillow==6.2.0          # CVE-2020-5312 (High severity)
+urllib3==1.24.1        # CVE-2019-11324 (Medium severity)
+Jinja2==2.10.1         # CVE-2020-28493 (Medium severity)
+cryptography==2.6.1    # CVE-2020-25659 (High severity)
+lxml==4.3.2            # CVE-2020-27783 (Medium severity)
+httplib2==0.17.0       # CVE-2020-11078 (Medium severity)
