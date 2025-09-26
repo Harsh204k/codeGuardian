@@ -1,123 +1,395 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
+"""
+Enhanced CLI for Hybrid Vulnerability Detection System
+Combines rule-based detection with ML-enhanced semantic analysis
+"""
+
 import argparse
+import json
 import sys
-import pathlib
-from engine.walker import collect_files
-from engine.rules_loader import load_rules
-from engine.scanner import scan_files
-from engine.ranker import rank_findings
-from engine.reporters.excel_exporter import export_excel
-from engine.reporters.sarif_exporter import export_sarif
-from engine.reporters.html_reporter import export_html
-from engine.fixes import apply_fix_interactive
+import os
+from pathlib import Path
+from typing import Dict, List, Optional
+
+# Add current directory to path for imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from ml.hybrid_detector import HybridVulnerabilityScanner
+
+
+def setup_args():
+    """Setup command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="CodeGuardian: Hybrid Vulnerability Detection System",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Detection Modes:
+  rules    - Traditional rule-based detection only
+  ml       - ML-based semantic analysis only  
+  hybrid   - Combined rule + ML approach (recommended)
+
+Examples:
+  python enhanced_cli.py scan file.c                    # Hybrid scan
+  python enhanced_cli.py scan file.c --mode rules       # Rules only
+  python enhanced_cli.py scan file.c --mode ml          # ML only
+  python enhanced_cli.py scan folder/ --recursive       # Scan directory
+  python enhanced_cli.py benchmark diversevul.json      # Benchmark mode
+        """,
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Scan command
+    scan_parser = subparsers.add_parser("scan", help="Scan files for vulnerabilities")
+    scan_parser.add_argument("target", help="File or directory to scan")
+    scan_parser.add_argument(
+        "--mode",
+        choices=["rules", "ml", "hybrid"],
+        default="hybrid",
+        help="Detection mode (default: hybrid)",
+    )
+    scan_parser.add_argument(
+        "--recursive", "-r", action="store_true", help="Scan directory recursively"
+    )
+    scan_parser.add_argument("--output", "-o", help="Output file for results")
+    scan_parser.add_argument(
+        "--format",
+        choices=["json", "sarif", "text"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    scan_parser.add_argument(
+        "--confidence",
+        type=float,
+        default=0.5,
+        help="ML confidence threshold (0.0-1.0, default: 0.5)",
+    )
+    scan_parser.add_argument(
+        "--no-ml",
+        action="store_true",
+        help="Disable ML features (equivalent to --mode rules)",
+    )
+
+    # Benchmark command
+    bench_parser = subparsers.add_parser("benchmark", help="Benchmark against dataset")
+    bench_parser.add_argument("dataset", help="Dataset file (JSONL format)")
+    bench_parser.add_argument(
+        "--samples",
+        type=int,
+        default=100,
+        help="Number of samples to test (default: 100)",
+    )
+    bench_parser.add_argument(
+        "--mode",
+        choices=["rules", "ml", "hybrid"],
+        default="hybrid",
+        help="Detection mode (default: hybrid)",
+    )
+    bench_parser.add_argument(
+        "--balanced",
+        action="store_true",
+        help="Use balanced sampling (equal vulnerable/safe)",
+    )
+
+    # Train command
+    train_parser = subparsers.add_parser("train", help="Train ML model")
+    train_parser.add_argument("dataset", help="Training dataset (JSONL format)")
+    train_parser.add_argument(
+        "--samples", type=int, default=10000, help="Training samples (default: 10000)"
+    )
+    train_parser.add_argument(
+        "--epochs", type=int, default=3, help="Training epochs (default: 3)"
+    )
+    train_parser.add_argument("--output", help="Output model directory")
+
+    # Status command
+    status_parser = subparsers.add_parser("status", help="Show system status")
+
+    return parser
+
+
+def scan_single_file(
+    scanner: HybridVulnerabilityScanner, file_path: str, mode: str, confidence: float
+) -> Dict:
+    """Scan a single file"""
+    try:
+        result = scanner.scan_file(file_path, mode=mode)
+        return result
+    except Exception as e:
+        return {"file_path": file_path, "error": str(e), "final_assessment": "error"}
+
+
+def scan_directory(
+    scanner: HybridVulnerabilityScanner,
+    directory: str,
+    recursive: bool,
+    mode: str,
+    confidence: float,
+) -> List[Dict]:
+    """Scan directory for source files"""
+    results = []
+    path = Path(directory)
+
+    # Common source file extensions
+    extensions = {
+        ".c",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".h",
+        ".hpp",
+        ".java",
+        ".py",
+        ".php",
+        ".js",
+        ".ts",
+        ".cs",
+    }
+
+    if recursive:
+        files = [
+            f for f in path.rglob("*") if f.suffix.lower() in extensions and f.is_file()
+        ]
+    else:
+        files = [
+            f for f in path.iterdir() if f.suffix.lower() in extensions and f.is_file()
+        ]
+
+    print(f"🔍 Found {len(files)} source files to scan")
+
+    for i, file_path in enumerate(files, 1):
+        print(f"[{i}/{len(files)}] Scanning {file_path.name}...", end=" ")
+
+        result = scan_single_file(scanner, str(file_path), mode, confidence)
+        results.append(result)
+
+        # Show quick result
+        if result.get("error"):
+            print("❌ ERROR")
+        elif result.get("final_assessment") == "vulnerable":
+            print(f"🔴 VULNERABLE (confidence: {result.get('confidence', 0):.2f})")
+        else:
+            print("🟢 SAFE")
+
+    return results
+
+
+def format_results(results: List[Dict], output_format: str) -> str:
+    """Format results for output"""
+    if output_format == "json":
+        return json.dumps(results, indent=2)
+
+    elif output_format == "sarif":
+        # Basic SARIF format
+        sarif = {
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "CodeGuardian",
+                            "version": "2.0",
+                            "informationUri": "https://github.com/your-org/codeguardian",
+                        }
+                    },
+                    "results": [],
+                }
+            ],
+        }
+
+        for result in results:
+            if result.get("final_assessment") == "vulnerable":
+                sarif_result = {
+                    "ruleId": "hybrid-vulnerability-detection",
+                    "level": (
+                        "error" if result.get("confidence", 0) > 0.8 else "warning"
+                    ),
+                    "message": {
+                        "text": f"Potential vulnerability detected (confidence: {result.get('confidence', 0):.2f})"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": result.get("file_path", "")
+                                },
+                                "region": {"startLine": 1},
+                            }
+                        }
+                    ],
+                }
+                sarif["runs"][0]["results"].append(sarif_result)
+
+        return json.dumps(sarif, indent=2)
+
+    else:  # text format
+        output = []
+        output.append("=" * 60)
+        output.append("🛡️  CODEGUARDIAN HYBRID VULNERABILITY SCAN RESULTS")
+        output.append("=" * 60)
+
+        vulnerable_files = [
+            r for r in results if r.get("final_assessment") == "vulnerable"
+        ]
+        safe_files = [r for r in results if r.get("final_assessment") == "safe"]
+        error_files = [r for r in results if r.get("final_assessment") == "error"]
+
+        output.append(f"\n📊 SUMMARY:")
+        output.append(f"   Total files scanned: {len(results)}")
+        output.append(f"   🔴 Vulnerable: {len(vulnerable_files)}")
+        output.append(f"   🟢 Safe: {len(safe_files)}")
+        output.append(f"   ❌ Errors: {len(error_files)}")
+
+        if vulnerable_files:
+            output.append(f"\n🔴 VULNERABLE FILES:")
+            for result in vulnerable_files:
+                output.append(f"   📄 {result['file_path']}")
+                output.append(f"      Confidence: {result.get('confidence', 0):.2f}")
+                output.append(
+                    f"      Hybrid Score: {result.get('hybrid_score', 0):.2f}"
+                )
+
+                if result.get("rule_findings"):
+                    output.append(
+                        f"      Rule Findings: {len(result['rule_findings'])}"
+                    )
+                    for finding in result["rule_findings"][:3]:  # Show top 3
+                        output.append(
+                            f"        - {finding.get('message', 'N/A')} (Line {finding.get('line', '?')})"
+                        )
+
+                if result.get("ml_analysis"):
+                    output.append(
+                        f"      ML Analysis: {result['ml_analysis'].get('explanation', 'N/A')}"
+                    )
+
+                output.append("")
+
+        if error_files:
+            output.append(f"\n❌ FILES WITH ERRORS:")
+            for result in error_files:
+                output.append(
+                    f"   📄 {result['file_path']}: {result.get('error', 'Unknown error')}"
+                )
+
+        return "\n".join(output)
+
+
+def benchmark_command(args):
+    """Run benchmark against dataset"""
+    print(f"🏁 BENCHMARKING AGAINST {args.dataset}")
+    print(f"   Mode: {args.mode}")
+    print(f"   Samples: {args.samples}")
+
+    # Implementation would go here
+    print("⚠️  Benchmarking not yet implemented in this demo")
+
+
+def train_command(args):
+    """Train ML model"""
+    print(f"🎓 TRAINING ML MODEL")
+    print(f"   Dataset: {args.dataset}")
+    print(f"   Samples: {args.samples}")
+
+    # Implementation would go here
+    print("⚠️  Training command not yet implemented in this demo")
+    print("   Use: python quick_train_ml.py")
+
+
+def status_command(args):
+    """Show system status"""
+    print("🔧 CODEGUARDIAN SYSTEM STATUS")
+    print("=" * 40)
+
+    # Check ML model
+    model_path = Path("models")
+    ml_models = list(model_path.glob("*codebert*")) if model_path.exists() else []
+
+    print(f"🤖 ML Models: {len(ml_models)} found")
+    for model in ml_models[:3]:
+        print(f"   - {model.name}")
+
+    # Check rules
+    rules_path = Path("rules")
+    rule_files = list(rules_path.glob("*.yml")) if rules_path.exists() else []
+
+    print(f"📋 Rule Files: {len(rule_files)} found")
+    for rule_file in rule_files:
+        print(f"   - {rule_file.name}")
+
+    # Test scanner initialization
+    try:
+        scanner = HybridVulnerabilityScanner(enable_ml=True)
+        print(
+            f"✅ Hybrid Scanner: Operational (ML {'enabled' if scanner.ml_enabled else 'disabled'})"
+        )
+    except Exception as e:
+        print(f"❌ Hybrid Scanner: Error - {e}")
+
 
 def main():
-    p = argparse.ArgumentParser("codeguardian")
-    subp = p.add_subparsers(dest="cmd", help="Commands")
-    
-    # Scan command
-    scan = subp.add_parser("scan", help="Scan for vulnerabilities")
-    scan.add_argument("path", help="Directory to scan")
-    scan.add_argument("-l", "--langs", default="auto", help="Languages to scan (auto/py/java/cpp/cs/php)")
-    scan.add_argument("-p", "--profile", choices=["strict", "balanced", "relaxed"], default="balanced", help="Profile")
-    scan.add_argument("-f", "--format", default="excel,sarif", help="Report formats (excel,sarif,html)")
-    scan.add_argument("-o", "--out", default="report", help="Output directory")
-    scan.add_argument("-n", "--name", default="scan", help="Scan name")
+    parser = setup_args()
+    args = parser.parse_args()
 
-    # Fix command
-    fix = subp.add_parser("fix", help="Apply security fixes")
-    fix.add_argument("path", help="Directory with findings")
-    fix.add_argument("-f", "--file", help="Results file path")
+    if not args.command:
+        parser.print_help()
+        return
 
-    # Deps command
-    deps = subp.add_parser("deps", help="Dependency audit")
-    deps.add_argument("path", help="Project directory")
-    
-    # Eval command  
-    eval_cmd = subp.add_parser("eval", help="Evaluation framework with F1 metrics")
-    eval_cmd.add_argument("path", help="Test directory to evaluate")
-    eval_cmd.add_argument("-p", "--profile", choices=["strict", "balanced", "relaxed"], default="balanced", help="Profile")
-    eval_cmd.add_argument("-g", "--ground-truth", help="Ground truth JSON file")
+    if args.command == "scan":
+        # Handle scan command
+        mode = "rules" if args.no_ml else args.mode
 
-    args = p.parse_args()
-    
-    # Only set out_dir for commands that need it
-    if args.cmd in ["scan", "fix"]:
-        out_dir = pathlib.Path(args.out if hasattr(args, 'out') else "report")
-    
-    if args.cmd == "scan":
-        files = collect_files(args.path, args.langs)
-        rules = load_rules(args.langs)
-        raw = scan_files(files, rules, profile=args.profile, appname=args.name)
-        ranked = rank_findings(raw)
-        
-        # Built-in CVE mock data for integration testing
-        class MockCVE:
-            def __init__(self, cve_id, package, version, severity, cvss_score, description, fixed_version=None):
-                self.cve_id = cve_id
-                self.package = package
-                self.version = version
-                self.severity = severity
-                self.cvss_score = cvss_score
-                self.description = description
-                self.fixed_version = fixed_version
-        
-        # Generate mock CVE findings for demonstration
-        cve_findings = [
-            MockCVE("CVE-2019-12308", "django", "2.0.0", "HIGH", 7.5, "SQL injection vulnerability in Django 2.0.0", "2.2.2"),
-            MockCVE("CVE-2018-18074", "requests", "2.19.1", "MEDIUM", 6.1, "URL redirection vulnerability in requests 2.19.1", "2.20.0"),
-            MockCVE("CVE-2019-1010083", "flask", "1.0.0", "MEDIUM", 5.0, "Denial of service vulnerability in Flask 1.0.0", "1.1.0")
-        ]
-        
-        print(f"Dependency scan: Found 3 mock CVEs for demonstration")
-        
-        out_dir.mkdir(parents=True, exist_ok=True)
-        fmts = [x.strip() for x in args.format.split(",")]
-        if "excel" in fmts: 
-            export_excel(ranked, out_dir / "stage1_results.xlsx", cve_findings)
-        if "sarif" in fmts: 
-            export_sarif(ranked, out_dir / "results.sarif")
-        if "html"  in fmts: 
-            export_html(ranked, out_dir / "results.html")
-        
-        total_findings = len(ranked) + len(cve_findings)
-        print(f"Scanned {len(files)} files -> {len(ranked)} static findings + {len(cve_findings)} CVEs = {total_findings} total. Reports in {out_dir}")
-        
-    elif args.cmd == "fix":
-        if not args.file:
-            print("Need -f/--file to point to results")
-            sys.exit(1)
-        findings_file = pathlib.Path(args.file)
-        if not findings_file.exists():
-            print(f"File not found: {findings_file}")
-            sys.exit(1)
-        apply_fix_interactive(args.path, str(findings_file))
-        
-    elif args.cmd == "deps":
+        print(f"🚀 CODEGUARDIAN HYBRID SCANNER")
+        print(f"   Target: {args.target}")
+        print(f"   Mode: {mode}")
+        print(f"   ML Confidence Threshold: {args.confidence}")
+        print()
+
+        # Initialize scanner
         try:
-            import importlib
-            deps_module = importlib.import_module('engine.deps')
-            run_dependency_audit = getattr(deps_module, 'run_dependency_audit')
-            ok = run_dependency_audit(args.path)
-            sys.exit(0 if ok else 2)
+            scanner = HybridVulnerabilityScanner(enable_ml=(mode != "rules"))
         except Exception as e:
-            print(f"⚠️ Dependency audit failed: {e}")
-            sys.exit(2)
-            
-    elif args.cmd == "eval":
-        from engine.evaluator import run_hackathon_evaluation
-        try:
-            results = run_hackathon_evaluation(
-                args.path, 
-                profile=args.profile,
-                ground_truth=args.ground_truth
+            print(f"❌ Failed to initialize scanner: {e}")
+            return 1
+
+        # Determine if target is file or directory
+        target_path = Path(args.target)
+
+        if not target_path.exists():
+            print(f"❌ Target not found: {args.target}")
+            return 1
+
+        # Scan target
+        if target_path.is_file():
+            print(f"📄 Scanning single file: {target_path.name}")
+            results = [
+                scan_single_file(scanner, str(target_path), mode, args.confidence)
+            ]
+        else:
+            print(f"📁 Scanning directory: {target_path}")
+            results = scan_directory(
+                scanner, str(target_path), args.recursive, mode, args.confidence
             )
-            # Success if F1 score is reasonable
-            f1_score = results["accuracy"]["f1_score"]
-            sys.exit(0 if f1_score >= 0.5 else 1)
-        except Exception as e:
-            print(f"⚠️ Evaluation failed: {e}")
-            sys.exit(1)
+
+        # Format and output results
+        formatted_output = format_results(results, args.format)
+
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(formatted_output)
+            print(f"\n💾 Results saved to: {args.output}")
+        else:
+            print(formatted_output)
+
+    elif args.command == "benchmark":
+        benchmark_command(args)
+
+    elif args.command == "train":
+        train_command(args)
+
+    elif args.command == "status":
+        status_command(args)
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
