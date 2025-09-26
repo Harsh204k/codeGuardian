@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 # Add current directory to path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from ml.hybrid_detector import HybridVulnerabilityScanner
+from src.ml.hybrid_detector import HybridVulnerabilityScanner
 
 
 def setup_args():
