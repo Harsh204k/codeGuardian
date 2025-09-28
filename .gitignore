@@ -20,8 +20,6 @@ __pycache__/
 .eggs/
 build/
 dist/
-.wheelhouse/
-pip-wheel-metadata/
 *.whl
 *.tar.gz
 *.zip
@@ -32,60 +30,31 @@ pip-wheel-metadata/
 venv/
 env/
 ENV/
-env.bak/
-venv.bak/
-*.venv
-pythonenv*
-.pyenv/
-.conda/
-.micromamba/
-.pipenv/
-Pipfile.lock
 
 # Static Analysis Tools and Binaries
+# -----------------------------------------------------------------------------
 /tools/
 
 # Development Tools & Caches
 # -----------------------------------------------------------------------------
-.pytest_cache/
 pytest_cache/
 .mypy_cache/
-.ruff_cache/
-.pyre/
-.pytype/
-.nox/
-.tox/
-.hypothesis/
 .coverage
 .coverage.*
 htmlcov/
 .cache/
-.dmypy.json
-.bandit
-.safety
 
 # IDE & Editor Settings
 # -----------------------------------------------------------------------------
 .vscode/
 .idea/
-*.code-workspace
-.vs/
-*.iml
-*.sublime-*
 *.swp
 *.swo
 *~
-.emacs.d/
-.vim/
 
 # Operating System Files
 # -----------------------------------------------------------------------------
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 Desktop.ini
 
@@ -96,17 +65,12 @@ Desktop.ini
 # Project Build Artifacts
 # -----------------------------------------------------------------------------
 codeguardian.egg-info/
-*.spec
-*.manifest
 
 # Machine Learning Models & Training Data
 # -----------------------------------------------------------------------------
 models/
 !models/.gitkeep
 models/**/
-ml_models/
-trained_models/
-checkpoints/
 *.pkl
 *.joblib
 *.model
@@ -122,42 +86,23 @@ checkpoints/
 # -----------------------------------------------------------------------------
 datasets/
 !datasets/.gitkeep
-datasets/ml/
-datasets/normalized/
-datasets/tmp/
 datasets/cache/
-datasets/processed/
-data/
-!data/.gitkeep
-training_data/
-test_data/
-validation_data/
 *.jsonl
 *.parquet
 DiverseVul*/
 Juliet/
 Zenodo/
-"Detection and Vulnerability CODEGUARDIAN"/
-"DiverseVul Dataset"/
+tools/
 
 # Scan Results & Reports
 # -----------------------------------------------------------------------------
-*_results/
-*_test_results/
-*_scan/
-*_demo/
-*_output/
-results/
-report/
 reports/
-output/
-scan_output/
 *.sarif
 *.html
 *.xlsx
-stage1_results.*
-comprehensive_analysis/
-diversevul_test_results/
+*.analysis
+*.report
+*.summary
 
 # Logs & Debug Files
 # -----------------------------------------------------------------------------
@@ -178,55 +123,20 @@ simple_test.py
 *.sqlite
 *.sqlite3
 *.db
-*.db-journal
 
 # Configuration & Secrets
 # -----------------------------------------------------------------------------
 .env
 .env.*
 secrets.json
-config.local.*
 *.key
 *.pem
 *.cert
-*.crt
 
 # Performance & Profiling
 # -----------------------------------------------------------------------------
 *.prof
 *.profile
-.prof/
-profile_results/
-
-# Jupyter Notebooks (checkpoints)
-# -----------------------------------------------------------------------------
-.ipynb_checkpoints/
-*/.ipynb_checkpoints/*
-
-# Documentation Build
-# -----------------------------------------------------------------------------
-docs/_build/
-docs/build/
-site/
-
-# Temporary Analysis Files
-# -----------------------------------------------------------------------------
-*.analysis
-*.report
-*.summary
-IMPLEMENTATION_*.md
-OPTIMAL_*.md
-HYBRID_*.md
-
-# OS Specific Exclusions
-# -----------------------------------------------------------------------------
-# Windows
-*.lnk
-# macOS
-.AppleDouble
-.LSOverride
-# Linux
-.directory
 
 # =============================================================================
 # KEEP ESSENTIAL STRUCTURE FILES
@@ -234,11 +144,13 @@ HYBRID_*.md
 !.gitkeep
 !README.md
 !requirements*.txt
+!cache
 !pyproject.toml
 !setup.py
 !pytest.ini
 !demos/
 !rules/
 !engine/
-# !tools/
+tools/js/*
+tools/spotbugs/*
 !tests/

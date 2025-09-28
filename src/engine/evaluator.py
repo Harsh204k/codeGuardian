@@ -175,10 +175,9 @@ def _canon(p: str) -> str:
 
 
 def load_gt(path):
-    for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        yield json.loads(line)
+    data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    for item in data:
+        yield item
 
 
 def k_loc_of_files(files):
@@ -355,7 +354,7 @@ def evaluate(gt_path, results_sarif, line_window=5):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gt", required=True, help="ground_truth.jsonl")
+    ap.add_argument("--gt", required=True, help="ground_truth.json")
     ap.add_argument(
         "--scan-path", help="(recommended) scan this path now for timing & SARIF"
     )
