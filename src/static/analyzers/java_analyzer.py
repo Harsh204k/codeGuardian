@@ -89,8 +89,20 @@ def run_spotbugs_analysis(file_path: str, app_name: str = "App") -> List[Finding
                 print("Warning: SpotBugs not found. Please check tools/spotbugs/bin/spotbugs.bat")
                 return findings
         else:
-            print("Warning: SpotBugs not available. Install with: apt-get install spotbugs")
-            return findings
+            # Try using the JAR directly on Linux/Mac
+            jar_path = Path(__file__).parent.parent.parent / ".." / "tools" / "spotbugs" / "lib" / "spotbugs.jar"
+            if jar_path.exists():
+                spotbugs_cmd = ["java", "-jar", str(jar_path)]
+                try:
+                    result = subprocess.run(spotbugs_cmd + ["--version"], capture_output=True, text=True, timeout=10)
+                    if result.returncode != 0:
+                        raise FileNotFoundError
+                except Exception:
+                    print("Warning: SpotBugs JAR not working. Please install SpotBugs.")
+                    return findings
+            else:
+                print("Warning: SpotBugs not available. Install with: apt-get install spotbugs or check tools/spotbugs/lib/spotbugs.jar")
+                return findings
 
     try:
         # Create temporary directory for analysis
