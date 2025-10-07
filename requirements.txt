@@ -25,6 +25,11 @@ scikit-learn>=1.5.0
 xgboost>=1.7.0
 joblib>=1.3.0
 
+###############################
+# I/O & Caching (Phase 2 Enhanced)
+###############################
+pyarrow>=14.0.0        # Parquet read/write for fast caching
+
 
 ###############################
 # CodeBERT / HuggingFace (Optional for training & inference)
@@ -42,6 +47,12 @@ tensorboard>=2.20.0
 # Static Analysis Tools
 ###############################
 bandit>=1.7.5          # Python security linter
+
+###############################
+# Logging & Observability (Phase 2 Enhanced)
+###############################
+loguru>=0.7.0          # Structured logging with rotation
+memory_profiler>=0.61.0  # Memory usage profiling
 
 ###############################
 # Testing

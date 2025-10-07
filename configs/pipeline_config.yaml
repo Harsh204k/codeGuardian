@@ -1,0 +1,459 @@
+# CodeGuardian Phase 2 Pipeline Configuration
+# Version: 3.1.0 (Production-Grade Enhanced)
+
+# ====================================================================
+# PATHS & DIRECTORIES
+# ====================================================================
+paths:
+  # Dataset root directory
+  datasets_root: "datasets"
+  
+  # Raw datasets
+  raw:
+    devign: "datasets/devign/raw"
+    zenodo: "datasets/zenodo"
+    diversevul: "datasets/diversevul/raw"
+    github_ppakshad: "datasets/github_ppakshad/raw"
+    codexglue: "datasets/codexglue_defect/raw"
+    megavul: "datasets/megavul/raw"
+    juliet: "datasets/juliet"
+  
+  # Processed outputs
+  processed:
+    root: "datasets/processed"
+    devign: "datasets/devign/processed"
+    zenodo: "datasets/zenodo/processed"
+    diversevul: "datasets/diversevul/processed"
+    github_ppakshad: "datasets/github_ppakshad/processed"
+    codexglue: "datasets/codexglue_defect/processed"
+    megavul: "datasets/megavul/processed"
+    juliet: "datasets/juliet/processed"
+  
+  # Unified dataset
+  unified:
+    root: "datasets/unified"
+    processed_all: "datasets/unified/processed_all.jsonl"
+    validated: "datasets/unified/validated.jsonl"
+    schema: "datasets/unified/schema.json"
+    validation_report: "datasets/unified/validation_report.json"
+    stats_summary: "datasets/unified/stats_summary.csv"
+  
+  # Features
+  features:
+    root: "datasets/features"
+    static: "datasets/features/features_static.csv"
+    embeddings: "datasets/features/features_embeddings.npy"
+    stats: "datasets/features/stats_features.json"
+  
+  # Final splits
+  splits:
+    root: "datasets/processed"
+    train: "datasets/processed/train.jsonl"
+    val: "datasets/processed/val.jsonl"
+    test: "datasets/processed/test.jsonl"
+    summary: "datasets/processed/split_summary.json"
+  
+  # Cache for intermediate results
+  cache:
+    root: "datasets/cache"
+    parquet: "datasets/cache/processed_datasets.parquet"
+    pickle: "datasets/cache/processed_datasets.pkl"
+  
+  # Logs
+  logs:
+    root: "logs/phase2"
+    profiling: "logs/profiling"
+    run_log: "logs/phase2/phase2_run_{timestamp}.log"
+    profile_report: "logs/profiling/phase2_profile_{timestamp}.txt"
+  
+  # Reports
+  reports:
+    pipeline_summary: "PIPELINE_REPORT.md"
+
+
+# ====================================================================
+# PIPELINE STAGES
+# ====================================================================
+pipeline:
+  # Stages to execute (in order)
+  stages:
+    - preprocessing
+    - normalization
+    - validation
+    - feature_engineering
+    - splitting
+  
+  # Enable/disable specific stages
+  enable:
+    preprocessing: true
+    normalization: true
+    validation: true
+    feature_engineering: true
+    splitting: true
+  
+  # Resume from specific stage
+  resume_from: null  # Options: preprocessing, normalization, validation, feature_engineering, splitting
+  
+  # Skip specific stages
+  skip: []  # List of stages to skip
+
+
+# ====================================================================
+# PREPROCESSING
+# ====================================================================
+preprocessing:
+  # Maximum records per dataset (null = all records)
+  max_records: null
+  
+  # Datasets to process
+  datasets:
+    - devign
+    - zenodo
+    - diversevul
+    - github_ppakshad
+    - codexglue
+    - megavul
+    - juliet
+  
+  # Parallel processing
+  parallel:
+    enabled: true
+    n_jobs: -1  # -1 = use all CPU cores, or specify number
+    backend: "threading"  # Options: threading, multiprocessing
+  
+  # Quick test mode
+  quick_test:
+    enabled: false
+    records_per_dataset: 1000
+
+
+# ====================================================================
+# NORMALIZATION
+# ====================================================================
+normalization:
+  # Deduplication strategy
+  deduplication:
+    enabled: true
+    method: "code_hash"  # Options: code_hash, exact_match
+    hash_algorithm: "sha256"
+  
+  # Schema enforcement
+  schema_validation:
+    enabled: true
+    strict_mode: false  # If true, reject invalid records; if false, auto-repair
+  
+  # Caching
+  cache:
+    enabled: true
+    format: "parquet"  # Options: parquet, pickle, both
+    compression: "snappy"
+
+
+# ====================================================================
+# VALIDATION
+# ====================================================================
+validation:
+  # Field type enforcement
+  field_types:
+    id: str
+    language: str
+    code: str
+    label: int
+    source_dataset: str
+    func_name: [str, "null"]
+    description: [str, "null"]
+    cwe_id: [str, "null"]
+    cve_id: [str, "null"]
+    project: [str, "null"]
+    file_name: [str, "null"]
+    commit_id: [str, "null"]
+  
+  # Required fields (non-null, non-empty)
+  required_fields:
+    - id
+    - language
+    - code
+    - label
+    - source_dataset
+  
+  # Validation checks
+  checks:
+    min_code_length: 10  # Minimum characters in code field
+    valid_labels: [0, 1]  # Binary classification
+    valid_languages:
+      - c
+      - cpp
+      - c++
+      - java
+      - python
+      - javascript
+      - js
+      - php
+      - go
+      - ruby
+      - rust
+      - kotlin
+      - swift
+      - csharp
+      - c#
+  
+  # Auto-repair settings
+  auto_repair:
+    enabled: true
+    trim_whitespace: true
+    normalize_language: true
+    fix_null_strings: true  # Convert "null", "None" strings to actual null
+  
+  # Duplicate detection
+  duplicate_detection:
+    enabled: true
+    method: "sha256"
+    report_limit: 100  # Max duplicates to list in report
+
+
+# ====================================================================
+# FEATURE ENGINEERING
+# ====================================================================
+feature_engineering:
+  # Metrics to extract
+  metrics:
+    # Code metrics
+    code_metrics:
+      - lines_of_code
+      - num_tokens
+      - avg_line_length
+      - comment_density
+      - function_length
+    
+    # Lexical features
+    lexical:
+      - keyword_count
+      - identifier_count
+      - numeric_count
+      - string_count
+      - operator_count
+      - special_char_count
+      - token_diversity  # Unique tokens / total tokens
+    
+    # Complexity metrics
+    complexity:
+      - cyclomatic_complexity
+      - nesting_depth
+      - ast_depth  # If AST parsing available
+      - conditional_count
+      - loop_count
+    
+    # Entropy-based
+    entropy:
+      - shannon_entropy
+      - identifier_entropy
+      - token_entropy
+    
+    # Ratios
+    ratios:
+      - comment_code_ratio
+      - identifier_keyword_ratio
+      - operator_operand_ratio
+  
+  # Embeddings
+  embeddings:
+    enabled: false  # Set to true if CodeBERT/MiniLM available
+    model: "microsoft/codebert-base"  # Options: microsoft/codebert-base, sentence-transformers/all-MiniLM-L6-v2
+    max_length: 512
+    batch_size: 32
+    cache_dir: "models/cache"
+  
+  # Output format
+  output:
+    static_format: "csv"  # Options: csv, parquet, jsonl
+    embeddings_format: "npy"  # Options: npy, npz, h5
+
+
+# ====================================================================
+# DATASET SPLITTING
+# ====================================================================
+splitting:
+  # Split ratios
+  ratios:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+  
+  # Stratification
+  stratify:
+    enabled: true
+    by: "label"  # Maintain label balance
+  
+  # Random seed for reproducibility
+  random_seed: 42
+  
+  # Validation
+  validate_balance:
+    enabled: true
+    max_difference: 0.02  # Max 2% difference in label distribution
+
+
+# ====================================================================
+# PERFORMANCE & OPTIMIZATION
+# ====================================================================
+performance:
+  # I/O optimization
+  io:
+    chunk_size: 10000  # Records to process per chunk
+    use_chunked_reads: true
+    compression: "gzip"  # For .jsonl.gz files
+    buffer_size: 65536  # 64KB buffer
+  
+  # Memory management
+  memory:
+    max_memory_gb: 8  # Maximum RAM to use
+    gc_frequency: 1000  # Run garbage collection every N records
+    use_memory_efficient_types: true
+  
+  # Profiling
+  profiling:
+    enabled: true
+    tools:
+      - cprofile
+      - memory_profiler
+    sample_interval: 0.001  # seconds
+    report_top_functions: 20
+
+
+# ====================================================================
+# LOGGING
+# ====================================================================
+logging:
+  # Log level
+  level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  
+  # Console output
+  console:
+    enabled: true
+    colorize: true
+    format: "[{time:HH:mm:ss}] {level: <8} | {message}"
+  
+  # File output
+  file:
+    enabled: true
+    rotation: "100 MB"  # Rotate when file reaches this size
+    retention: "7 days"  # Keep logs for this duration
+    compression: "zip"
+    format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
+  
+  # Progress bars
+  progress_bars:
+    enabled: true
+    style: "rich"  # Options: tqdm, rich
+  
+  # Per-dataset logging
+  per_dataset_logging:
+    enabled: true
+    include_timing: true
+    include_record_counts: true
+    include_anomalies: true
+
+
+# ====================================================================
+# QUALITY THRESHOLDS
+# ====================================================================
+thresholds:
+  # Validation pass rate
+  min_validation_pass_rate: 0.98  # 98% of records must pass validation
+  
+  # Duplicate threshold
+  max_duplicate_rate: 0.05  # Max 5% duplicates allowed
+  
+  # Missing data threshold
+  max_missing_rate: 0.10  # Max 10% missing values per field
+  
+  # Label balance
+  min_label_ratio: 0.20  # Minority class must be at least 20%
+  max_label_ratio: 0.80  # Majority class must be at most 80%
+
+
+# ====================================================================
+# REPORTING
+# ====================================================================
+reporting:
+  # Auto-generate pipeline report
+  auto_generate: true
+  
+  # Report sections
+  sections:
+    - summary
+    - dataset_statistics
+    - validation_results
+    - feature_coverage
+    - performance_metrics
+    - recommendations
+  
+  # Output format
+  format: "markdown"  # Options: markdown, html, pdf
+  
+  # Include visualizations
+  visualizations:
+    enabled: true
+    include:
+      - label_distribution
+      - language_distribution
+      - dataset_sizes
+      - feature_correlations
+      - validation_stats
+
+
+# ====================================================================
+# ERROR HANDLING
+# ====================================================================
+error_handling:
+  # Continue on error
+  continue_on_error: false
+  
+  # Max errors per stage before abort
+  max_errors_per_stage: 10
+  
+  # Retry settings
+  retry:
+    enabled: true
+    max_attempts: 3
+    backoff_factor: 2  # Exponential backoff
+  
+  # Error logging
+  detailed_errors: true
+  include_stack_traces: true
+
+
+# ====================================================================
+# TESTING & DEVELOPMENT
+# ====================================================================
+testing:
+  # Dry run mode (no actual writes)
+  dry_run: false
+  
+  # Sample size for quick tests
+  sample_size: 1000
+  
+  # Integrity checks
+  integrity_checks:
+    enabled: true
+    verify_file_existence: true
+    verify_file_sizes: true
+    verify_record_counts: true
+  
+  # Stress testing
+  stress_test:
+    enabled: false
+    records: 10000
+    iterations: 5
+
+
+# ====================================================================
+# METADATA
+# ====================================================================
+metadata:
+  version: "3.1.0"
+  description: "Production-Grade Enhanced Pipeline Configuration"
+  last_updated: "2025-10-08"
+  author: "CodeGuardian Team"
+  hackathon: "DPIIT PS-1"
+  stage: "Stage I - Leaderboard"
