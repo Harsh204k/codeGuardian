@@ -1,0 +1,211 @@
+# XGBoost Static Model Configuration
+# Phase 3.2 Enhanced Training Configuration
+
+model_name: "xgb_static"
+version: "3.2.0"
+
+# Data Configuration
+data:
+  features_csv: "datasets/features/features_all.csv"
+  processed_dir: "datasets/processed"
+  splits:
+    train: "train.jsonl"
+    val: "val.jsonl"
+    test: "test.jsonl"
+  
+  # Feature columns (M1-M15 static metrics)
+  feature_columns:
+    - M1_cyclomatic_complexity
+    - M2_nesting_depth
+    - M3_num_operators
+    - M4_num_operands
+    - M5_num_unique_operators
+    - M6_num_unique_operands
+    - M7_halstead_length
+    - M8_halstead_vocabulary
+    - M9_halstead_volume
+    - M10_halstead_difficulty
+    - M11_halstead_effort
+    - M12_maintainability_index
+    - M13_loc
+    - M14_cognitive_complexity
+    - M15_code_complexity_score
+  
+  # Additional features
+  additional_features:
+    - vulnerability_count
+    - severity_score
+    - static_confidence
+    - has_vulnerabilities
+    - critical_count
+    - high_count
+    - medium_count
+    - low_count
+  
+  # Categorical features
+  categorical_features:
+    - language
+  
+  target_column: "label"
+  id_column: "id"
+
+# Preprocessing
+preprocessing:
+  impute_strategy: "median"  # median, mean, or constant
+  scale_features: false  # Not needed for tree models
+  remove_low_variance: true
+  variance_threshold: 0.01
+  handle_categorical: "onehot"  # onehot or target_encode
+  max_categories: 50
+
+# Model Hyperparameters (defaults)
+model:
+  # Core parameters
+  n_estimators: 500
+  max_depth: 8
+  learning_rate: 0.05
+  
+  # Regularization
+  gamma: 0.1
+  min_child_weight: 3
+  subsample: 0.8
+  colsample_bytree: 0.8
+  colsample_bylevel: 0.8
+  
+  # Additional
+  tree_method: "hist"  # hist for speed, gpu_hist for GPU
+  eval_metric: ["aucpr", "auc"]
+  early_stopping_rounds: 50
+  
+  # Class imbalance
+  scale_pos_weight: null  # auto-calculated if null
+  
+  # Random seed
+  random_state: 42
+  
+  # Other
+  n_jobs: -1
+  verbosity: 1
+
+# Hyperparameter Tuning (Optuna)
+tuning:
+  enabled: false
+  n_trials: 50
+  timeout: null  # seconds, null for no timeout
+  
+  # Search space
+  search_space:
+    n_estimators:
+      type: "int"
+      low: 100
+      high: 2000
+      step: 100
+    max_depth:
+      type: "int"
+      low: 3
+      high: 12
+    learning_rate:
+      type: "float"
+      low: 0.01
+      high: 0.3
+      log: true
+    subsample:
+      type: "float"
+      low: 0.6
+      high: 1.0
+    colsample_bytree:
+      type: "float"
+      low: 0.4
+      high: 1.0
+    gamma:
+      type: "float"
+      low: 0.0
+      high: 5.0
+    min_child_weight:
+      type: "int"
+      low: 1
+      high: 10
+  
+  # Optimization
+  direction: "maximize"  # maximize AUC-PR
+  metric: "pr_auc"
+  cv_folds: 3
+
+# Class Imbalance Handling
+imbalance:
+  strategy: "scale_pos_weight"  # scale_pos_weight, oversample, undersample, or none
+  threshold_ratio: 1.5  # Apply if neg/pos > threshold
+  
+  # SMOTE parameters (if oversample)
+  smote:
+    k_neighbors: 5
+    sampling_strategy: "auto"
+  
+  # Undersampling parameters
+  undersample:
+    sampling_strategy: "auto"
+
+# Calibration
+calibration:
+  enabled: true
+  method: "isotonic"  # isotonic or sigmoid
+  cv_folds: 5
+
+# Explainability (SHAP)
+explainability:
+  enabled: true
+  save_plots: true
+  save_samples: true
+  n_samples: 500  # Top N samples to explain
+  
+  # SHAP parameters
+  shap:
+    check_additivity: false
+    approximate: true
+    max_evals: 1000
+
+# Evaluation
+evaluation:
+  metrics:
+    - roc_auc
+    - pr_auc
+    - f1
+    - precision
+    - recall
+    - accuracy
+  
+  # Threshold optimization
+  optimize_threshold: true
+  threshold_metric: "f1"  # f1, precision, or recall
+  
+  # Additional analysis
+  save_confusion_matrix: true
+  save_roc_curve: true
+  save_pr_curve: true
+  save_reliability_diagram: true
+
+# Output Paths
+output:
+  models_dir: "models/static"
+  metrics_dir: "metrics"
+  plots_dir: "plots/static"
+  shap_dir: "shap/static"
+  logs_dir: "logs/static"
+  
+  # Naming convention
+  model_filename: "xgb_static_v{timestamp}.joblib"
+  metadata_filename: "metadata_xgb_static_v{timestamp}.yaml"
+  metrics_filename: "static_eval_{split}.json"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  save_to_file: true
+  log_filename: "training_xgb_static_{timestamp}.log"
+
+# Reproducibility
+reproducibility:
+  seed: 42
+  deterministic: true
+  save_git_commit: true
+  save_environment: true
