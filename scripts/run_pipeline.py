@@ -236,7 +236,14 @@ class IntegrityChecker:
             'validation': ['datasets/unified/validated.jsonl', 'datasets/unified/validation_report.json'],
             'feature_engineering': ['datasets/features/features_static.csv'],
             'splitting': ['datasets/processed/train.jsonl', 'datasets/processed/val.jsonl', 'datasets/processed/test.jsonl'],
-            'static_analysis': ['src/static/outputs/static_flags_train.csv', 'src/static/outputs/static_flags_val.csv', 'src/static/outputs/static_flags_test.csv']
+            'static_analysis': [
+                'datasets/static_results/train_static_results.jsonl',
+                'datasets/static_results/val_static_results.jsonl',
+                'datasets/static_results/test_static_results.jsonl',
+                'datasets/static_results/train_static_flags.csv',
+                'datasets/static_results/val_static_flags.csv',
+                'datasets/static_results/test_static_flags.csv'
+            ]
         }
         
         if stage not in stage_outputs:
@@ -354,22 +361,40 @@ class EnhancedPipelineOrchestrator:
                 from pathlib import Path
                 import subprocess
                 
-                # Run static analysis on all splits
-                script_path = Path('src/static/run_static_analysis.py')
+                # Run static analysis pipeline on all splits
+                script_path = Path('src/static/pipeline/run_static_pipeline.py')
                 
                 if not script_path.exists():
                     self.logger.error(f"Static analysis script not found: {script_path}")
                     return False
                 
-                self.logger.info("Running static analysis on all dataset splits...")
+                self.logger.info("Running static analysis pipeline on all dataset splits...")
                 
-                # Run the static analysis script
-                result = subprocess.run(
-                    [sys.executable, str(script_path), '--split', 'all'],
-                    capture_output=True,
-                    text=True,
-                    timeout=3600  # 1 hour timeout
-                )
+                # Process each split (train, val, test)
+                splits = ['train', 'val', 'test']
+                for split in splits:
+                    input_file = Path(f'datasets/processed/{split}.jsonl')
+                    if not input_file.exists():
+                        self.logger.warning(f"Split file not found: {input_file}, skipping...")
+                        continue
+                    
+                    self.logger.info(f"Analyzing {split} split...")
+                    result = subprocess.run(
+                        [sys.executable, str(script_path), 
+                         '--input', str(input_file),
+                         '--output-dir', 'datasets/static_results',
+                         '--workers', '8'],
+                        capture_output=True,
+                        text=True,
+                        timeout=3600  # 1 hour timeout per split
+                    )
+                    
+                    if result.returncode != 0:
+                        self.logger.error(f"Static analysis failed for {split} split")
+                        self.logger.error(result.stderr)
+                        return False
+                
+                result = subprocess.run(['echo', 'done'], capture_output=True, text=True)  # Dummy for next block
                 
                 if result.returncode == 0:
                     self.logger.info("Static analysis completed successfully")

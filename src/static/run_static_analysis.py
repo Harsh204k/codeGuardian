@@ -12,7 +12,6 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.static.analyzers.multi_analyzer import MultiAnalyzer
-from src.static.analyzers.explainability import ExplainabilityGenerator
 
 
 # Configure logging
@@ -95,25 +94,6 @@ Examples:
     )
     
     parser.add_argument(
-        '--no-incremental',
-        action='store_true',
-        help='Disable incremental per-language saves'
-    )
-    
-    parser.add_argument(
-        '--explainability',
-        action='store_true',
-        default=True,
-        help='Generate explainability reports (default: enabled)'
-    )
-    
-    parser.add_argument(
-        '--no-explainability',
-        action='store_true',
-        help='Disable explainability report generation'
-    )
-    
-    parser.add_argument(
         '--export',
         action='store_true',
         help='Export results in additional formats'
@@ -142,26 +122,19 @@ Examples:
     
     # Initialize multi-analyzer
     logger.info("=" * 80)
-    logger.info("CodeGuardian Static Analysis Module - Phase 3.2 (Enhanced)")
+    logger.info("CodeGuardian Static Analysis Module - Phase 3")
     logger.info("=" * 80)
     logger.info(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Input directory: {args.input_dir}")
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Rules directory: {args.rules_dir}")
     logger.info(f"Workers: {args.workers}")
-    logger.info(f"Incremental saves: {not args.no_incremental}")
-    logger.info(f"Explainability reports: {not args.no_explainability}")
     
     try:
         multi_analyzer = MultiAnalyzer(
             rules_dir=args.rules_dir,
             max_workers=args.workers
         )
-        
-        # Initialize explainability generator if enabled
-        if not args.no_explainability:
-            explainability_gen = ExplainabilityGenerator()
-        
     except Exception as e:
         logger.error(f"Failed to initialize analyzer: {e}")
         sys.exit(1)
@@ -190,42 +163,10 @@ Examples:
             stats = multi_analyzer.analyze_dataset(
                 dataset_path=input_file,
                 output_dir=args.output_dir,
-                batch_size=args.batch_size,
-                incremental_save=(not args.no_incremental)
+                batch_size=args.batch_size
             )
             
             all_stats[split] = stats
-            
-            # Generate explainability report if enabled
-            if not args.no_explainability:
-                logger.info("")
-                logger.info(f"Generating explainability report for {split} split...")
-                
-                try:
-                    # Load analysis results
-                    analysis_jsonl = args.output_dir / f"static_analysis_{split}.jsonl"
-                    
-                    if analysis_jsonl.exists():
-                        import json
-                        results = []
-                        with open(analysis_jsonl, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                results.append(json.loads(line.strip()))
-                        
-                        # Generate report
-                        report = explainability_gen.generate_report(results, split)
-                        
-                        # Save report
-                        report_path = args.output_dir / 'reports' / f"explain_{split}.json"
-                        explainability_gen.save_report(report, report_path)
-                        
-                        logger.info(f"Explainability report saved to {report_path}")
-                        logger.info(f"  - Unique CWEs: {report['cwe_analysis']['unique_cwes']}")
-                        logger.info(f"  - Avg confidence: {report['summary']['avg_confidence']}")
-                        logger.info(f"  - Vulnerability rate: {report['summary']['vulnerability_rate']}")
-                    
-                except Exception as e:
-                    logger.error(f"Error generating explainability report: {e}")
             
             # Print summary
             logger.info("")
@@ -270,20 +211,16 @@ Examples:
         logger.info(f"  Total vulnerabilities detected: {total_vulns}")
         logger.info("")
         logger.info(f"Output files saved to: {args.output_dir}")
-        logger.info(f"  - static_flags_*.csv (for ML model with confidence scores)")
+        logger.info(f"  - static_flags_*.csv (for ML model)")
         logger.info(f"  - static_analysis_*.jsonl (full results)")
-        logger.info(f"  - reports/explain_*.json (explainability reports)")
         logger.info(f"  - logs/analyzer_report_*.json (vulnerability reports)")
         logger.info(f"  - logs/analysis_stats_*.json (statistics)")
-        if not args.no_incremental:
-            logger.info(f"  - incremental/static_analysis_*_*.jsonl (per-language checkpoints)")
     
     logger.info("=" * 80)
     logger.info("Next steps:")
-    logger.info("  1. Review explainability reports in outputs/reports/")
-    logger.info("  2. Analyze confidence scores and CWE distribution")
-    logger.info("  3. Use static_flags_*.csv as input to XGBoost fusion model")
-    logger.info("  4. Review top vulnerable functions and precision proxies")
+    logger.info("  1. Review vulnerability reports in outputs/logs/")
+    logger.info("  2. Use static_flags_*.csv as input to XGBoost fusion model")
+    logger.info("  3. Analyze CWE distribution and detection accuracy")
     logger.info("=" * 80)
 
 

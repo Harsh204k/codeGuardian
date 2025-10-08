@@ -88,61 +88,12 @@ class BaseAnalyzer(ABC):
                 'cwe_id': 'CWE-89',
                 'rule_id': 'sql_injection_basic',
                 'severity': 'HIGH',
-                'confidence': 0.85,
                 'line': 42,
                 'description': '...',
                 'remediation': '...'
             }, ...]
         """
         pass
-    
-    def compute_overall_confidence(self, vulnerabilities: List[Dict[str, Any]]) -> float:
-        """
-        Compute overall confidence score from vulnerability findings.
-        Uses weighted maximum approach considering severity and confidence.
-        
-        Args:
-            vulnerabilities: List of detected vulnerabilities
-            
-        Returns:
-            Overall confidence score (0.0 - 1.0)
-        """
-        if not vulnerabilities:
-            return 0.0
-        
-        # Use rule engine's confidence computation if available
-        if self.rule_engine and hasattr(self.rule_engine, 'compute_overall_confidence'):
-            return self.rule_engine.compute_overall_confidence(vulnerabilities)
-        
-        # Fallback implementation
-        severity_weights = {
-            'critical': 1.0,
-            'high': 0.8,
-            'medium': 0.6,
-            'low': 0.4,
-            'info': 0.2
-        }
-        
-        max_weighted_confidence = 0.0
-        
-        for vuln in vulnerabilities:
-            # Get confidence
-            confidence = vuln.get('confidence', 0.5)
-            if isinstance(confidence, str):
-                confidence_map = {'high': 0.9, 'medium': 0.7, 'low': 0.5}
-                confidence = confidence_map.get(confidence.lower(), 0.5)
-            
-            # Get severity weight
-            severity = vuln.get('severity', 'medium')
-            if isinstance(severity, str):
-                severity = severity.lower()
-            severity_weight = severity_weights.get(severity, 0.5)
-            
-            # Compute weighted confidence
-            weighted = confidence * severity_weight
-            max_weighted_confidence = max(max_weighted_confidence, weighted)
-        
-        return round(max_weighted_confidence, 3)
 
     def compute_cyclomatic_complexity(self, code: str) -> int:
         """
