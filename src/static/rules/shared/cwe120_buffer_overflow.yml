@@ -1,0 +1,35 @@
+# CWE-120: Buffer Overflow Rules (C/C++)
+
+rules:
+  - id: buffer_overflow_strcpy
+    name: "Buffer Overflow via strcpy"
+    cwe_id: "CWE-120"
+    severity: HIGH
+    confidence: HIGH
+    type: api_call
+    api_names: [strcpy, strcat, sprintf, vsprintf, gets]
+    description: "Unsafe string function without bounds checking"
+    remediation: "Use strncpy, strncat, snprintf, or C++ string class"
+    languages: [c, cpp]
+    
+  - id: buffer_overflow_scanf
+    name: "Buffer Overflow via scanf"
+    cwe_id: "CWE-120"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: 'scanf\s*\([^)]*%s[^)]*\)'
+    description: "scanf with %s without width specifier"
+    remediation: "Use width specifier: %99s instead of %s"
+    languages: [c, cpp]
+    
+  - id: buffer_overflow_memcpy
+    name: "Potential Buffer Overflow in memcpy"
+    cwe_id: "CWE-120"
+    severity: MEDIUM
+    confidence: LOW
+    type: regex
+    pattern: 'memcpy\s*\([^,]+,\s*[^,]+,\s*sizeof'
+    description: "memcpy with sizeof - verify correct buffer sizes"
+    remediation: "Ensure destination buffer size is adequate"
+    languages: [c, cpp]

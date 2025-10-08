@@ -1,0 +1,35 @@
+# CWE-400: Uncontrolled Resource Consumption (DoS) Rules
+
+rules:
+  - id: dos_regex_redos
+    name: "Regular Expression DoS (ReDoS)"
+    cwe_id: "CWE-400"
+    severity: MEDIUM
+    confidence: LOW
+    type: regex
+    pattern: 're\.compile\s*\([^)]*\(\.\*\)\+|\(\.\+\)\+'
+    description: "Potential ReDoS via catastrophic backtracking"
+    remediation: "Avoid nested quantifiers in regex"
+    languages: [python, javascript, java]
+    
+  - id: dos_infinite_loop
+    name: "Potential Infinite Loop"
+    cwe_id: "CWE-400"
+    severity: LOW
+    confidence: LOW
+    type: regex
+    pattern: 'while\s*\(\s*(true|1|True)\s*\)'
+    description: "Infinite loop without break condition"
+    remediation: "Add proper exit condition"
+    languages: [all]
+    
+  - id: dos_large_allocation
+    name: "Large Memory Allocation"
+    cwe_id: "CWE-400"
+    severity: LOW
+    confidence: LOW
+    type: regex
+    pattern: '(malloc|alloc|new)\s*\([^)]*\*[^)]*\)'
+    description: "Memory allocation with multiplication (potential overflow)"
+    remediation: "Validate allocation size"
+    languages: [c, cpp, java]

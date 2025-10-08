@@ -1,175 +1,52 @@
-﻿rules:
-  - id: PHP-SQLI-001
-    name: "SQL Injection (mysqli_query with concat)"
-    pattern: "(?s)mysqli_query\\s*\\(\\s*\\$\\w+\\s*,\\s*\".*\"\\s*\\.\\s*\\$\\w+"
-    cwe: "CWE-89"
-    owasp: "A03:2021-Injection"
-    severity: "HIGH"
-    confidence: 0.85
-    why: "Concatenating user input into SQL enables injection."
-    fix:
-      type: "suggest"
-      message: "Use prepared statements (PDO::prepare/execute)."
+# PHP Security Rules
 
-  - id: PHP-XSS-001
-    name: "Reflected XSS via echo of user input"
-    pattern: "(?m)echo\\s*\\$\\w+\\s*;|print\\s*\\$\\w+\\s*;"
-    cwe: "CWE-79"
-    owasp: "A03:2021-Injection"
-    severity: "MEDIUM"
-    confidence: 0.75
-    why: "Echoing unsanitized input can execute JS in the browser."
-    fix:
-      type: "suggest"
-      message: "Escape/encode output (htmlspecialchars) or validate inputs."
-
-  - id: PHP-SQLI-002
-    name: "SQL Injection via mysqli_query with $_GET concat"
-    pattern: "(?s)mysqli_query\\s*\\([^)]*\"[^\"]*\"\\s*\\.\\s*\\$_(?:GET|POST|REQUEST)\\["
-    cwe: "CWE-89"
-    owasp: "A03:2021-Injection"
-    severity: "CRITICAL"
-    confidence: 0.95
-    why: "Direct concatenation of user input from $_GET/$_POST into SQL."
-    fix:
-      type: "suggest"
-      message: "Use prepared statements to prevent SQL injection."
-
-  - id: PHP-SQLI-003
-    name: "SQL Injection via basic concatenation"
-    pattern: "(?s)\"SELECT\\s+.*?\"\\s*\\.\\s*\\$\\w+"
-    cwe: "CWE-89"
-    owasp: "A03:2021-Injection"
-    severity: "HIGH"
-    confidence: 0.8
-    why: "String concatenation in SQL queries enables injection."
-    fix:
-      type: "suggest"
-      message: "Use prepared statements with parameter binding."
-
-  - id: PHP-CMDI-001
-    name: "Command Injection via exec/system"
-    pattern: "(?s)(exec|system|shell_exec|passthru)\\s*\\(\\s*[\"'][^\"']*[\"']\\s*\\.\\s*\\$\\w+"
-    cwe: "CWE-78"
-    owasp: "A03:2021-Injection"
-    severity: "HIGH"
-    confidence: 0.9
-    why: "Executing shell commands with user input enables command injection."
-    fix:
-      type: "suggest"
-      message: "Validate input and use escapeshellcmd/escapeshellarg."
-
-  - id: PHP-LFI-001
-    name: "Local File Inclusion"
-    pattern: "(?s)(include|require|include_once|require_once)\\s*\\(\\s*\\$\\w+"
-    cwe: "CWE-98"
-    owasp: "A03:2021-Injection"
-    severity: "HIGH"
-    confidence: 0.85
-    why: "Including files based on user input enables LFI attacks."
-    fix:
-      type: "suggest"
-      message: "Validate file paths against whitelist of allowed files."
-
-  - id: PHP-EVAL-001
-    name: "Code Injection via eval"
-    pattern: "(?s)eval\\s*\\(\\s*\\$\\w+"
-    cwe: "CWE-95"
-    owasp: "A03:2021-Injection"
-    severity: "HIGH"
-    confidence: 0.95
-    why: "Using eval() with user input enables arbitrary code execution."
-    fix:
-      type: "suggest"
-      message: "Never use eval() with user input. Find safer alternatives."
-
-  # ===== INSECURE DESERIALIZATION (CWE-502) =====
-  - id: PHP-DESER-001
-    name: "Insecure object deserialization"
-    pattern: "(?s)unserialize\\s*\\(\\s*\\$_(GET|POST|REQUEST|COOKIE)"
-    cwe: "CWE-502"
-    owasp: "A08:2021-Software and Data Integrity Failures"
-    severity: "CRITICAL"
-    confidence: 0.95
-    why: "Deserializing untrusted data can lead to arbitrary code execution."
-    fix:
-      type: "suggest"
-      message: "Use safe data formats like JSON or validate serialized data."
-
-  # ===== XML EXTERNAL ENTITY (CWE-611) =====
-  - id: PHP-XXE-001
-    name: "XML External Entity injection"
-    pattern: "(?s)simplexml_load_string\\s*\\(\\s*\\$_(GET|POST|REQUEST)"
-    cwe: "CWE-611"
-    owasp: "A05:2021-Security Misconfiguration"
-    severity: "HIGH"
-    confidence: 0.85
-    why: "XML parsing of user input without XXE protection."
-    fix:
-      type: "suggest"
-      message: "Disable external entity loading in XML parsers."
-
-  # ===== SERVER-SIDE REQUEST FORGERY (CWE-918) =====
-  - id: PHP-SSRF-001
-    name: "Server-side Request Forgery"
-    pattern: "(?s)(file_get_contents|curl_setopt|fopen)\\s*\\([^)]*\\$_(GET|POST|REQUEST)"
-    cwe: "CWE-918"
-    owasp: "A10:2021-Server-Side Request Forgery"
-    severity: "HIGH"
-    confidence: 0.9
-    why: "User-controlled URLs in HTTP requests enable SSRF attacks."
-    fix:
-      type: "suggest"
-      message: "Validate URLs against allowlist and restrict protocols."
-
-  # ===== AUTHENTICATION BYPASS (CWE-287) =====
-  - id: PHP-AUTH-001
-    name: "Weak authentication bypass"
-    pattern: "(?m)\\$password\\s*==\\s*\\$_(GET|POST|REQUEST)"
-    cwe: "CWE-287"
-    owasp: "A07:2021-Identification and Authentication Failures"
-    severity: "HIGH"
-    confidence: 0.8
-    why: "Direct password comparison without proper hashing."
-    fix:
-      type: "suggest"
-      message: "Use password_verify() with properly hashed passwords."
-
-  # ===== SESSION FIXATION (CWE-384) =====
-  - id: PHP-SESSION-001
-    name: "Session fixation vulnerability"
-    pattern: "(?m)session_id\\s*\\(\\s*\\$_(GET|POST|REQUEST)"
-    cwe: "CWE-384"
-    owasp: "A07:2021-Identification and Authentication Failures"
-    severity: "MEDIUM"
-    confidence: 0.85
-    why: "Allowing user to set session ID enables session fixation."
-    fix:
-      type: "suggest"
-      message: "Use session_regenerate_id() and validate session management."
-
-  # ===== WEAK CRYPTOGRAPHY (CWE-327) =====
-  - id: PHP-CRYPTO-001
-    name: "Weak cryptographic hash"
-    pattern: "(?m)(md5|sha1)\\s*\\(.*password"
-    cwe: "CWE-327"
-    owasp: "A02:2021-Cryptographic Failures"
-    severity: "HIGH"
-    confidence: 0.9
-    why: "MD5 and SHA1 are cryptographically broken for passwords."
-    fix:
-      type: "suggest"
-      message: "Use password_hash() with strong algorithms like bcrypt."
-
-  # ===== INFORMATION DISCLOSURE (CWE-200) =====
-  - id: PHP-INFO-001
-    name: "Information disclosure via phpinfo"
-    pattern: "(?m)phpinfo\\s*\\(\\s*\\)"
-    cwe: "CWE-200"
-    owasp: "A05:2021-Security Misconfiguration"
-    severity: "MEDIUM"
-    confidence: 0.95
-    why: "phpinfo() exposes sensitive server configuration."
-    fix:
-      type: "suggest"
-      message: "Remove phpinfo() calls from production code."
+rules:
+  - id: php_eval_usage
+    name: "Use of eval()"
+    cwe_id: "CWE-94"
+    severity: CRITICAL
+    confidence: HIGH
+    type: api_call
+    api_names: [eval, assert]
+    description: "eval() executes arbitrary PHP code"
+    remediation: "Avoid eval(); refactor code"
+    
+  - id: php_weak_hash
+    name: "Weak Password Hashing"
+    cwe_id: "CWE-327"
+    severity: HIGH
+    confidence: HIGH
+    type: api_call
+    api_names: [md5, sha1]
+    description: "MD5/SHA1 are not suitable for password hashing"
+    remediation: "Use password_hash() with bcrypt"
+    
+  - id: php_sql_injection
+    name: "SQL Injection"
+    cwe_id: "CWE-89"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '(mysql_query|mysqli_query)\s*\([^)]*\$_(GET|POST|REQUEST)'
+    description: "Direct use of user input in SQL query"
+    remediation: "Use prepared statements"
+    
+  - id: php_file_inclusion
+    name: "File Inclusion Vulnerability"
+    cwe_id: "CWE-98"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '(include|require)(_once)?\s*\([^)]*\$_(GET|POST|REQUEST)'
+    description: "User input in file inclusion"
+    remediation: "Validate file paths with allowlist"
+    
+  - id: php_command_injection
+    name: "Command Injection"
+    cwe_id: "CWE-78"
+    severity: HIGH
+    confidence: HIGH
+    type: api_call
+    api_names: [exec, system, shell_exec, passthru, proc_open]
+    description: "OS command execution"
+    remediation: "Avoid shell commands or use escapeshellarg()"

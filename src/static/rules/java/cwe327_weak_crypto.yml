@@ -1,9 +1,0 @@
-id: JAVA.CWE327.WEAK.CRYPTO
-name: Weak crypto algorithm or mode
-cwe: CWE-327
-owasp: A02:2021-Cryptographic Failures
-severity: medium
-languages: [java]
-patterns:
-  - 'MessageDigest\.getInstance\s*\(\s*"(MD5|SHA1)"\s*\)'
-  - 'Cipher\.getInstance\s*\(\s*".*AES/ECB.*"\s*\)'

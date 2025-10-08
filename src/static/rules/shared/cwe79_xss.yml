@@ -1,0 +1,57 @@
+# CWE-79: Cross-Site Scripting (XSS) Rules
+
+rules:
+  - id: xss_innerhtml
+    name: "XSS via innerHTML"
+    cwe_id: "CWE-79"
+    severity: HIGH
+    confidence: HIGH
+    type: regex
+    pattern: '\.innerHTML\s*=\s*[^;]*'
+    description: "Direct assignment to innerHTML without sanitization"
+    remediation: "Use textContent or DOMPurify to sanitize HTML"
+    languages: [javascript]
+    
+  - id: xss_document_write
+    name: "XSS via document.write"
+    cwe_id: "CWE-79"
+    severity: MEDIUM
+    confidence: HIGH
+    type: api_call
+    api_names: [document.write, document.writeln]
+    description: "Use of document.write() can lead to XSS"
+    remediation: "Avoid document.write; use DOM manipulation"
+    languages: [javascript]
+    
+  - id: xss_php_echo
+    name: "XSS via PHP echo"
+    cwe_id: "CWE-79"
+    severity: MEDIUM
+    confidence: MEDIUM
+    type: regex
+    pattern: '(echo|print)\s+\$_(GET|POST|REQUEST|COOKIE)'
+    description: "Direct output of user input without escaping"
+    remediation: "Use htmlspecialchars() or htmlentities()"
+    languages: [php]
+    
+  - id: xss_python_flask_render
+    name: "XSS in Flask templates"
+    cwe_id: "CWE-79"
+    severity: MEDIUM
+    confidence: LOW
+    type: regex
+    pattern: '\{\{\s*[^|]*\s*\}\}'
+    description: "Jinja2 template variable without escaping filter"
+    remediation: "Use |e filter or enable autoescape"
+    languages: [python]
+    
+  - id: xss_react_dangerously
+    name: "XSS via dangerouslySetInnerHTML"
+    cwe_id: "CWE-79"
+    severity: HIGH
+    confidence: HIGH
+    type: keyword
+    keywords: [dangerouslySetInnerHTML]
+    description: "React dangerouslySetInnerHTML usage"
+    remediation: "Avoid dangerouslySetInnerHTML or sanitize with DOMPurify"
+    languages: [javascript]

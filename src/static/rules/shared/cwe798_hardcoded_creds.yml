@@ -1,0 +1,35 @@
+# CWE-798: Use of Hard-coded Credentials Rules
+
+rules:
+  - id: hardcoded_password
+    name: "Hard-coded Password"
+    cwe_id: "CWE-798"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '(password|passwd|pwd)\s*=\s*["\'][^"\']{6,}["\']'
+    description: "Hard-coded password in source code"
+    remediation: "Use environment variables or secrets management"
+    languages: [all]
+    
+  - id: hardcoded_api_key
+    name: "Hard-coded API Key"
+    cwe_id: "CWE-798"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '(api[_-]?key|apikey|api[_-]?secret)\s*=\s*["\'][A-Za-z0-9]{20,}["\']'
+    description: "Hard-coded API key in source code"
+    remediation: "Use environment variables or key vault"
+    languages: [all]
+    
+  - id: hardcoded_token
+    name: "Hard-coded Authentication Token"
+    cwe_id: "CWE-798"
+    severity: HIGH
+    confidence: LOW
+    type: regex
+    pattern: '(token|auth[_-]?token|access[_-]?token)\s*=\s*["\'][A-Za-z0-9+/=]{30,}["\']'
+    description: "Hard-coded authentication token"
+    remediation: "Use secure credential storage"
+    languages: [all]

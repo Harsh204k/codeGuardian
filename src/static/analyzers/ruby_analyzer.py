@@ -1,5 +1,5 @@
 """
-Go Static Code Analyzer
+Ruby Static Code Analyzer
 """
 from typing import Dict, List, Any
 from .base_analyzer import BaseAnalyzer
@@ -7,13 +7,13 @@ from ..features.static_feature_extractor import StaticFeatureExtractor
 import re
 
 
-class GoAnalyzer(BaseAnalyzer):
-    """Analyzer for Go code"""
+class RubyAnalyzer(BaseAnalyzer):
+    """Analyzer for Ruby code"""
     
     def __init__(self, language: str, rule_engine=None):
         super().__init__(language, rule_engine)
         self.feature_extractor = StaticFeatureExtractor()
-        self.dangerous_functions = {'exec.Command', 'os.OpenFile', 'ioutil.ReadFile', 'eval'}
+        self.dangerous_functions = {'eval', 'exec', 'system', 'send', 'instance_eval', 'class_eval', 'Marshal.load'}
     
     def analyze(self, code: str, record_id: str = None) -> Dict[str, Any]:
         metrics = self.extract_metrics(code)
@@ -43,25 +43,43 @@ class GoAnalyzer(BaseAnalyzer):
         if self.rule_engine and self.rules:
             metrics = self.extract_metrics(code)
             vulnerabilities.extend(self.rule_engine.execute_all_rules(self.rules, code, metrics))
+        vulnerabilities.extend(self._check_code_injection(code))
         vulnerabilities.extend(self._check_sql_injection(code))
         vulnerabilities.extend(self._check_command_injection(code))
-        vulnerabilities.extend(self._check_path_traversal(code))
         return vulnerabilities
+    
+    def _check_code_injection(self, code: str) -> List[Dict[str, Any]]:
+        findings = []
+        patterns = [(r'\beval\s*\(', 'eval()'), (r'\binstance_eval\s*\(', 'instance_eval()'), 
+                    (r'\bclass_eval\s*\(', 'class_eval()'), (r'\.send\s*\(', 'send()')]
+        for pattern, desc in patterns:
+            for match in re.finditer(pattern, code):
+                findings.append({
+                    'rule_id': 'ruby_code_injection',
+                    'cwe_id': 'CWE-94',
+                    'severity': 'CRITICAL',
+                    'description': f'Code injection: {desc}',
+                    'line': code[:match.start()].count('\n') + 1,
+                    'matched_text': match.group(0),
+                    'remediation': 'Avoid eval and dynamic execution',
+                    'confidence': 'HIGH'
+                })
+        return findings
     
     def _check_sql_injection(self, code: str) -> List[Dict[str, Any]]:
         findings = []
         patterns = [
-            r'\.Query\s*\([^)]*\+[^)]*\)',
-            r'\.Exec\s*\([^)]*\+[^)]*\)',
-            r'fmt\.Sprintf\s*\([^)]*SELECT',
+            r'\.execute\s*\([^)]*#\{',
+            r'\.find_by_sql\s*\([^)]*#\{',
+            r'\.where\s*\([^)]*#\{',
         ]
         for pattern in patterns:
-            for match in re.finditer(pattern, code, re.IGNORECASE):
+            for match in re.finditer(pattern, code):
                 findings.append({
-                    'rule_id': 'go_sql_injection',
+                    'rule_id': 'ruby_sql_injection',
                     'cwe_id': 'CWE-89',
                     'severity': 'HIGH',
-                    'description': 'SQL injection via string concatenation',
+                    'description': 'SQL injection via string interpolation',
                     'line': code[:match.start()].count('\n') + 1,
                     'matched_text': match.group(0)[:50],
                     'remediation': 'Use parameterized queries',
@@ -71,33 +89,17 @@ class GoAnalyzer(BaseAnalyzer):
     
     def _check_command_injection(self, code: str) -> List[Dict[str, Any]]:
         findings = []
-        pattern = r'exec\.Command\s*\([^)]*\+[^)]*\)'
-        for match in re.finditer(pattern, code):
-            findings.append({
-                'rule_id': 'go_command_injection',
-                'cwe_id': 'CWE-78',
-                'severity': 'HIGH',
-                'description': 'Command injection via exec.Command',
-                'line': code[:match.start()].count('\n') + 1,
-                'matched_text': match.group(0)[:50],
-                'remediation': 'Validate command inputs',
-                'confidence': 'MEDIUM'
-            })
-        return findings
-    
-    def _check_path_traversal(self, code: str) -> List[Dict[str, Any]]:
-        findings = []
-        patterns = [r'os\.Open\s*\([^)]*\+[^)]*\)', r'ioutil\.ReadFile\s*\([^)]*\+[^)]*\)']
-        for pattern in patterns:
+        patterns = [(r'\bsystem\s*\(', 'system()'), (r'\bexec\s*\(', 'exec()'), (r'`[^`]*#\{', 'backtick execution')]
+        for pattern, desc in patterns:
             for match in re.finditer(pattern, code):
                 findings.append({
-                    'rule_id': 'go_path_traversal',
-                    'cwe_id': 'CWE-22',
-                    'severity': 'MEDIUM',
-                    'description': 'Path traversal in file operations',
+                    'rule_id': 'ruby_command_injection',
+                    'cwe_id': 'CWE-78',
+                    'severity': 'HIGH',
+                    'description': f'Command injection: {desc}',
                     'line': code[:match.start()].count('\n') + 1,
                     'matched_text': match.group(0)[:50],
-                    'remediation': 'Validate file paths',
+                    'remediation': 'Validate command inputs',
                     'confidence': 'MEDIUM'
                 })
         return findings

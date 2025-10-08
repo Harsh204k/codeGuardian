@@ -1,0 +1,42 @@
+# Go Security Rules
+
+rules:
+  - id: go_sql_injection
+    name: "SQL Injection"
+    cwe_id: "CWE-89"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '\.(Query|Exec)\s*\([^)]*fmt\.Sprintf'
+    description: "SQL query with string formatting"
+    remediation: "Use parameterized queries with ?"
+    
+  - id: go_command_injection
+    name: "Command Injection"
+    cwe_id: "CWE-78"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: 'exec\.Command\s*\([^)]*\+'
+    description: "Command execution with string concatenation"
+    remediation: "Validate command inputs"
+    
+  - id: go_weak_crypto
+    name: "Weak Cryptography"
+    cwe_id: "CWE-327"
+    severity: MEDIUM
+    confidence: HIGH
+    type: keyword
+    keywords: [crypto/md5, crypto/sha1, crypto/des]
+    description: "Use of weak cryptographic algorithms"
+    remediation: "Use crypto/sha256 or newer"
+    
+  - id: go_error_not_checked
+    name: "Error Not Checked"
+    cwe_id: "CWE-252"
+    severity: LOW
+    confidence: LOW
+    type: regex
+    pattern: '^\s*\w+\([^)]*\)\s*$'
+    description: "Function return value not checked"
+    remediation: "Check error returns"

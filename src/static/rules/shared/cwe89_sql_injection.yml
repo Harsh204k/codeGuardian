@@ -1,0 +1,62 @@
+# CWE-89: SQL Injection Rules
+# Detects SQL injection vulnerabilities across multiple languages
+
+rules:
+  - id: sql_injection_string_concat
+    name: "SQL Injection via String Concatenation"
+    cwe_id: "CWE-89"
+    severity: HIGH
+    confidence: HIGH
+    type: regex
+    pattern: '(execute|executeQuery|executeUpdate|query|exec)\s*\([^)]*[\+&]'
+    description: "SQL query constructed using string concatenation with user input"
+    remediation: "Use parameterized queries or prepared statements"
+    languages: [java, python, javascript, php, go, ruby, c, cpp]
+    
+  - id: sql_injection_format_string
+    name: "SQL Injection via Format String"
+    cwe_id: "CWE-89"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '(execute|query|exec)\s*\([^)]*(%s|%d|\.format|sprintf)'
+    description: "SQL query using string formatting without parameterization"
+    remediation: "Use prepared statements with parameter binding"
+    languages: [python, php, c, cpp]
+    
+  - id: sql_injection_php_interpolation
+    name: "SQL Injection via PHP Variable Interpolation"
+    cwe_id: "CWE-89"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '(mysql_query|mysqli_query|pg_query)\s*\([^)]*\$'
+    description: "SQL query with PHP variable interpolation"
+    remediation: "Use PDO prepared statements"
+    languages: [php]
+    
+  - id: sql_injection_python_fstring
+    name: "SQL Injection via Python f-strings"
+    cwe_id: "CWE-89"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: 'f["\'].*?(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP).*?\{.*?\}'
+    description: "SQL query using Python f-string interpolation"
+    remediation: "Use parameterized queries with ? placeholders"
+    languages: [python]
+    
+  - id: sql_injection_javascript_template
+    name: "SQL Injection via JavaScript Template Literals"
+    cwe_id: "CWE-89"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '`.*?(SELECT|INSERT|UPDATE|DELETE).*?\$\{.*?\}`'
+    description: "SQL query using template literal interpolation"
+    remediation: "Use parameterized queries"
+    languages: [javascript]
+
+# References:
+# - OWASP Top 10: A03:2021 – Injection
+# - CWE-89: Improper Neutralization of Special Elements used in an SQL Command

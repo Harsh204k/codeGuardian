@@ -16,7 +16,7 @@ from sklearn.metrics import precision_recall_fscore_support, classification_repo
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from xgboost import XGBClassifier
+from fusion import XGBClassifier
 from sklearn.ensemble import RandomForestClassifier
 import joblib
 

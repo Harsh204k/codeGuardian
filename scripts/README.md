@@ -4,14 +4,16 @@
 
 Complete modular data processing pipeline for preprocessing and normalizing 7 vulnerability datasets into a unified format ready for model training and evaluation.
 
-## 🚀 Quick Start (New Orchestrator)
+## 🚀 Quick Start
 
 **Use the new dynamic pipeline orchestrator for one-command execution:**
+
 ```bash
 python scripts/run_pipeline.py
 ```
 
 **Advanced options:**
+
 ```bash
 # Skip already-completed phases
 python scripts/run_pipeline.py --skip preprocessing
@@ -48,6 +50,7 @@ scripts/
 ```
 
 **Benefits:**
+
 - ✅ Dynamic module discovery with `importlib`
 - ✅ Phase dependency management
 - ✅ Skip/resume functionality
@@ -63,8 +66,8 @@ scripts/
 - [Pipeline Architecture](#pipeline-architecture)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
-  - [Phase 1: Data Preprocessing & Normalization](#phase-1-data-preprocessing--normalization)
-  - [Phase 2: Validation, Feature Engineering & Splitting](#phase-2-validation-feature-engineering--splitting)
+  - [Phase 1: Data Preprocessing &amp; Normalization](#phase-1-data-preprocessing--normalization)
+  - [Phase 2: Validation, Feature Engineering &amp; Splitting](#phase-2-validation-feature-engineering--splitting)
 - [Unified Schema](#unified-schema)
 - [Output Structure](#output-structure)
 - [Advanced Usage](#advanced-usage)
@@ -321,6 +324,7 @@ python scripts/validate_normalized_data.py --no-remove-duplicates
 ```
 
 **Validation checks:**
+
 - Required fields presence (`id`, `language`, `code`, `label`, `source_dataset`)
 - Label validity (must be 0 or 1)
 - Code quality (minimum length, non-empty)
@@ -329,6 +333,7 @@ python scripts/validate_normalized_data.py --no-remove-duplicates
 - CWE/CVE format validation
 
 **Outputs:**
+
 - `datasets/unified/validated.jsonl` - Clean, validated records
 - `datasets/unified/validation_report.json` - Comprehensive statistics
 
@@ -348,12 +353,14 @@ python scripts/feature_engineering.py \
 ```
 
 **Features extracted:**
+
 - **Code metrics**: LOC, token count, average line length, comment density
 - **Lexical features**: keyword counts, identifier counts, numeric/string literals
 - **Complexity metrics**: cyclomatic complexity, nesting depth
 - **Entropy**: Shannon entropy of code tokens
 
 **Outputs:**
+
 - `datasets/features/features_all.jsonl` - Feature-enriched records
 - `datasets/features/stats_features.json` - Feature statistics and correlations
 
@@ -382,11 +389,13 @@ python scripts/split_datasets.py \
 ```
 
 **Features:**
+
 - Stratified splitting (maintains label balance across splits)
 - Reproducible (default seed=42)
 - Language and dataset distribution tracking
 
 **Outputs:**
+
 - `datasets/processed/train.jsonl` - Training set (80%)
 - `datasets/processed/val.jsonl` - Validation set (10%)
 - `datasets/processed/test.jsonl` - Test set (10%)
@@ -519,6 +528,7 @@ After running the complete pipeline (Phase 1 + Phase 2), the key model-ready fil
 - **For testing**: `datasets/processed/test.jsonl`
 
 Each record includes:
+
 - All unified schema fields (id, language, code, label, etc.)
 - Extracted features (LOC, complexity, entropy, etc.)
 - Stratified label distribution

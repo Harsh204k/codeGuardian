@@ -1,291 +1,209 @@
-#!/usr/bin/env python3
 """
-Java static analysis using SpotBugs for security vulnerability detection.
-Outputs findings in the same format as the main scanner.
+Java Static Code Analyzer
+Specialized analyzer for Java vulnerability detection
 """
-
-import json
-import subprocess
-import sys
-import tempfile
-import uuid
-from pathlib import Path
-from typing import List, Dict, Any
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Any
+from .base_analyzer import BaseAnalyzer
+from ..features.static_feature_extractor import StaticFeatureExtractor
+import re
 
 
-@dataclass
-class Finding:
-    id: str
-    app: str
-    language: str
-    rule_id: str
-    name: str
-    file: str
-    line: int
-    snippet: str
-    cwe: str
-    owasp: str
-    severity: str
-    confidence: float
-    why: str
-    quickfix: dict = None
-
-
-# Mapping from SpotBugs bug types to CWE numbers
-SPOTBUGS_CWE_MAPPING = {
-    "SQL_INJECTION": "CWE-89",
-    "XSS_REQUEST_PARAMETER": "CWE-79",
-    "XSS_SERVLET": "CWE-79",
-    "COMMAND_INJECTION": "CWE-78",
-    "PATH_TRAVERSAL_IN": "CWE-22",
-    "PATH_TRAVERSAL_OUT": "CWE-22",
-    "WEAK_TRUST_MANAGER": "CWE-295",
-    "WEAK_HOSTNAME_VERIFIER": "CWE-295",
-    "WEAK_MESSAGE_DIGEST_MD5": "CWE-327",
-    "WEAK_MESSAGE_DIGEST_SHA1": "CWE-327",
-    "HARD_CODE_PASSWORD": "CWE-798",
-    "HARD_CODE_KEY": "CWE-798",
-    "INSECURE_COOKIE": "CWE-614",
-    "HTTPONLY_COOKIE": "CWE-1004",
-    "MALICIOUS_CODE": "CWE-502",
-    "XXE": "CWE-611",
-    "RANDOM": "CWE-338",
-    "DES_USAGE": "CWE-327",
-    "RSA_NO_PADDING": "CWE-780",
-    "NULL_CIPHER": "CWE-327",
-}
-
-
-def run_spotbugs_analysis(file_path: str, app_name: str = "App") -> List[Finding]:
-    """
-    Run SpotBugs analysis on a Java file.
-    """
-    findings = []
-
-
-    # Try to find spotbugs in PATH or use tools/spotbugs/bin/spotbugs.bat (Windows)
-    import platform
-    spotbugs_cmd = "spotbugs"
-    try:
-        result = subprocess.run([spotbugs_cmd, "--version"], capture_output=True, text=True, timeout=10)
-        if result.returncode != 0:
-            raise FileNotFoundError
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        # Try fallback for Windows
-        if platform.system().lower() == "windows":
-            fallback = str(Path(__file__).parent.parent.parent / ".." / "tools" / "spotbugs" / "bin" / "spotbugs.bat")
-            if Path(fallback).exists():
-                spotbugs_cmd = fallback
-                try:
-                    result = subprocess.run([spotbugs_cmd, "--version"], capture_output=True, text=True, timeout=10, shell=True)
-                    if result.returncode != 0:
-                        print("Warning: SpotBugs not found. Please check tools/spotbugs/bin/spotbugs.bat")
-                        return findings
-                except Exception:
-                    print("Warning: SpotBugs not available. Please check tools/spotbugs/bin/spotbugs.bat")
-                    return findings
-            else:
-                print("Warning: SpotBugs not found. Please check tools/spotbugs/bin/spotbugs.bat")
-                return findings
-        else:
-            # Try using the JAR directly on Linux/Mac
-            jar_path = Path(__file__).parent.parent.parent / ".." / "tools" / "spotbugs" / "lib" / "spotbugs.jar"
-            if jar_path.exists():
-                spotbugs_cmd = ["java", "-jar", str(jar_path)]
-                try:
-                    result = subprocess.run(spotbugs_cmd + ["--version"], capture_output=True, text=True, timeout=10)
-                    if result.returncode != 0:
-                        raise FileNotFoundError
-                except Exception:
-                    print("Warning: SpotBugs JAR not working. Please install SpotBugs.")
-                    return findings
-            else:
-                print("Warning: SpotBugs not available. Install with: apt-get install spotbugs or check tools/spotbugs/lib/spotbugs.jar")
-                return findings
-
-    try:
-        # Create temporary directory for analysis
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-
-            # Compile Java file first (if not already compiled)
-            java_file = Path(file_path)
-            if java_file.suffix.lower() == ".java":
-                # Try to compile the Java file
-                class_file = temp_path / (java_file.stem + ".class")
-                compile_result = subprocess.run(
-                    ["javac", "-d", str(temp_path), str(java_file)],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-
-                if compile_result.returncode != 0:
-                    # If compilation fails, try to analyze the source directly
-                    # This is a fallback - SpotBugs works better with compiled classes
-                    print(
-                        f"Warning: Could not compile {file_path}: {compile_result.stderr}"
-                    )
-                    return findings
-
-                # Run SpotBugs on the compiled class
-                spotbugs_result = subprocess.run(
-                    [
-                        spotbugs_cmd,
-                        "-textui",
-                        "-low",
-                        "-xml:withMessages",
-                        "-output",
-                        str(temp_path / "spotbugs_result.xml"),
-                        str(class_file),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    shell=True if platform.system().lower() == "windows" else False,
-                )
-
-                if spotbugs_result.returncode == 0:
-                    # Parse the XML output (simplified parsing)
-                    xml_file = temp_path / "spotbugs_result.xml"
-                    if xml_file.exists():
-                        findings = parse_spotbugs_xml(
-                            str(xml_file), file_path, app_name
-                        )
-
-            else:
-                # Assume it's already a compiled .class file
-                spotbugs_result = subprocess.run(
-                    [
-                        spotbugs_cmd,
-                        "-textui",
-                        "-low",
-                        "-xml:withMessages",
-                        "-output",
-                        str(temp_path / "spotbugs_result.xml"),
-                        str(java_file),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    shell=True if platform.system().lower() == "windows" else False,
-                )
-
-                if spotbugs_result.returncode == 0:
-                    xml_file = temp_path / "spotbugs_result.xml"
-                    if xml_file.exists():
-                        findings = parse_spotbugs_xml(
-                            str(xml_file), file_path, app_name
-                        )
-
-    except subprocess.TimeoutExpired:
-        print(f"Warning: SpotBugs analysis timed out for {file_path}")
-    except Exception as e:
-        print(f"Warning: SpotBugs analysis failed for {file_path}: {e}")
-
-    return findings
-
-
-def parse_spotbugs_xml(xml_file: str, source_file: str, app_name: str) -> List[Finding]:
-    """
-    Parse SpotBugs XML output and convert to our Finding format.
-    """
-    findings = []
-
-    try:
-        # Simple XML parsing (in production, use proper XML parser)
-        with open(xml_file, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # Extract BugInstance entries
-        import re
-
-        bug_pattern = r'<BugInstance[^>]*type="([^"]*)"[^>]*>.*?<SourceLine[^>]*start="(\d*)"[^>]*>.*?<Message>([^<]*)</Message>.*?</BugInstance>'
-        matches = re.findall(bug_pattern, content, re.DOTALL)
-
-        for bug_type, line_num, message in matches:
-            try:
-                line = int(line_num)
-                cwe = SPOTBUGS_CWE_MAPPING.get(bug_type, "CWE-UNKNOWN")
-
-                # Map severity based on bug type
-                severity = "MEDIUM"
-                if "HIGH" in bug_type or "CRITICAL" in bug_type:
-                    severity = "HIGH"
-                elif "LOW" in bug_type:
-                    severity = "LOW"
-
-                # Get code snippet
-                try:
-                    with open(source_file, "r", encoding="utf-8") as sf:
-                        lines = sf.readlines()
-                        snippet = (
-                            lines[line - 1].strip()[:240]
-                            if 0 <= line - 1 < len(lines)
-                            else ""
-                        )
-                except:
-                    snippet = ""
-
-                finding = Finding(
-                    id=f"SPOTBUGS-{str(uuid.uuid4())[:8]}",
-                    app=app_name,
-                    language="java",
-                    rule_id=bug_type,
-                    name=f"SpotBugs: {bug_type}",
-                    file=source_file,
-                    line=line,
-                    snippet=snippet,
-                    cwe=cwe,
-                    owasp="-",
-                    severity=severity,
-                    confidence=0.8,  # SpotBugs is generally reliable
-                    why=f"SpotBugs detected: {message}",
-                    quickfix=None,
-                )
-                findings.append(finding)
-
-            except (ValueError, IndexError) as e:
-                continue
-
-    except Exception as e:
-        print(f"Warning: Failed to parse SpotBugs XML output: {e}")
-
-    return findings
-
-
-def analyze_java_file(file_path: str, app_name: str = "App") -> Dict[str, Any]:
-    """
-    Analyze a single Java file and return results in JSON format.
-    """
-    findings = run_spotbugs_analysis(file_path, app_name)
-
-    return {
-        "language": "java",
-        "file": file_path,
-        "analyzer": "spotbugs",
-        "findings_count": len(findings),
-        "findings": [asdict(f) for f in findings],
-    }
-
-
-def main():
-    """CLI interface for Java static analysis."""
-    if len(sys.argv) < 2:
-        print("Usage: python java_analyzer.py <file_or_directory> [app_name]")
-        sys.exit(1)
-
-    target_path = sys.argv[1]
-    app_name = sys.argv[2] if len(sys.argv) > 2 else "App"
-
-    if not Path(target_path).exists():
-        print(f"Error: {target_path} does not exist")
-        sys.exit(1)
-
-    result = analyze_java_file(target_path, app_name)
-    print(json.dumps(result, indent=2))
-
-
-if __name__ == "__main__":
-    main()
+class JavaAnalyzer(BaseAnalyzer):
+    """Analyzer for Java code"""
+    
+    def __init__(self, language: str, rule_engine=None):
+        super().__init__(language, rule_engine)
+        self.feature_extractor = StaticFeatureExtractor()
+        
+        self.dangerous_functions = {
+            'Runtime.exec', 'ProcessBuilder', 'deserialize',
+            'readObject', 'ObjectInputStream',
+            'ScriptEngine.eval', 'Class.forName'
+        }
+        
+        self.security_apis = [
+            r'\bRuntime\.getRuntime\(\)\.exec\s*\(',
+            r'\bProcessBuilder\s*\(',
+            r'\breadObject\s*\(',
+            r'\bObjectInputStream\s*\(',
+            r'\.createStatement\s*\(',
+            r'\.executeQuery\s*\(',
+        ]
+    
+    def analyze(self, code: str, record_id: str = None) -> Dict[str, Any]:
+        """Perform complete Java static analysis"""
+        metrics = self.extract_metrics(code)
+        vulnerabilities = self.detect_vulnerabilities(code)
+        static_flags = self.generate_static_flags(metrics, vulnerabilities)
+        severity_scores = self.calculate_severity_score(vulnerabilities)
+        detected_cwes = self.map_vulnerabilities_to_cwes(vulnerabilities)
+        overall_confidence = self.compute_overall_confidence(vulnerabilities)
+        
+        return {
+            'id': record_id,
+            'language': self.language,
+            'static_metrics': metrics,
+            'detected_cwes': detected_cwes,
+            'vulnerabilities': vulnerabilities,
+            'static_flags': static_flags,
+            'vulnerability_count': len(vulnerabilities),
+            'severity_scores': severity_scores,
+            'overall_confidence': overall_confidence
+        }
+    
+    def extract_metrics(self, code: str) -> Dict[str, Any]:
+        """Extract all static metrics for Java code"""
+        return self.feature_extractor.extract_all_features(code, self.language)
+    
+    def detect_vulnerabilities(self, code: str) -> List[Dict[str, Any]]:
+        """Detect Java specific vulnerabilities"""
+        vulnerabilities = []
+        
+        if self.rule_engine and self.rules:
+            metrics = self.extract_metrics(code)
+            vulnerabilities.extend(
+                self.rule_engine.execute_all_rules(self.rules, code, metrics)
+            )
+        
+        vulnerabilities.extend(self._check_sql_injection(code))
+        vulnerabilities.extend(self._check_command_injection(code))
+        vulnerabilities.extend(self._check_deserialization(code))
+        vulnerabilities.extend(self._check_xxe(code))
+        vulnerabilities.extend(self._check_path_traversal(code))
+        
+        return vulnerabilities
+    
+    def _check_sql_injection(self, code: str) -> List[Dict[str, Any]]:
+        """Detect SQL injection vulnerabilities (CWE-89)"""
+        findings = []
+        
+        # String concatenation in SQL
+        patterns = [
+            r'(executeQuery|executeUpdate|execute)\s*\([^)]*\+[^)]*\)',
+            r'(createStatement|prepareStatement)\s*\([^)]*\+[^)]*\)',
+            r'(query|sql)\s*=\s*["\'][^"\']*\+',
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, code, re.IGNORECASE)
+            for match in matches:
+                line_num = code[:match.start()].count('\n') + 1
+                findings.append({
+                    'rule_id': 'java_sql_injection',
+                    'cwe_id': 'CWE-89',
+                    'severity': 'HIGH',
+                    'description': 'SQL injection via string concatenation',
+                    'line': line_num,
+                    'matched_text': match.group(0)[:50],
+                    'remediation': 'Use PreparedStatement with parameterized queries',
+                    'confidence': 'HIGH'
+                })
+        
+        return findings
+    
+    def _check_command_injection(self, code: str) -> List[Dict[str, Any]]:
+        """Detect command injection (CWE-78)"""
+        findings = []
+        
+        patterns = [
+            (r'Runtime\.getRuntime\(\)\.exec\s*\(', 'Runtime.exec() usage'),
+            (r'ProcessBuilder\s*\([^)]*\+', 'ProcessBuilder with concatenation'),
+        ]
+        
+        for pattern, desc in patterns:
+            matches = re.finditer(pattern, code)
+            for match in matches:
+                line_num = code[:match.start()].count('\n') + 1
+                findings.append({
+                    'rule_id': 'java_command_injection',
+                    'cwe_id': 'CWE-78',
+                    'severity': 'HIGH',
+                    'description': f'Command injection risk: {desc}',
+                    'line': line_num,
+                    'matched_text': match.group(0),
+                    'remediation': 'Validate and sanitize command inputs',
+                    'confidence': 'MEDIUM'
+                })
+        
+        return findings
+    
+    def _check_deserialization(self, code: str) -> List[Dict[str, Any]]:
+        """Detect insecure deserialization (CWE-502)"""
+        findings = []
+        
+        patterns = [
+            (r'\breadObject\s*\(', 'ObjectInputStream.readObject()'),
+            (r'\bObjectInputStream\s*\(', 'ObjectInputStream usage'),
+            (r'\.deserialize\s*\(', 'Deserialization'),
+        ]
+        
+        for pattern, desc in patterns:
+            matches = re.finditer(pattern, code)
+            for match in matches:
+                line_num = code[:match.start()].count('\n') + 1
+                findings.append({
+                    'rule_id': 'java_deserialization',
+                    'cwe_id': 'CWE-502',
+                    'severity': 'HIGH',
+                    'description': f'Insecure deserialization: {desc}',
+                    'line': line_num,
+                    'matched_text': match.group(0),
+                    'remediation': 'Implement input validation and use safe deserialization',
+                    'confidence': 'HIGH'
+                })
+        
+        return findings
+    
+    def _check_xxe(self, code: str) -> List[Dict[str, Any]]:
+        """Detect XML External Entity injection (CWE-611)"""
+        findings = []
+        
+        # XML parsing without secure configuration
+        patterns = [
+            r'DocumentBuilderFactory\.newInstance\s*\(',
+            r'SAXParserFactory\.newInstance\s*\(',
+            r'XMLInputFactory\.newInstance\s*\(',
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, code)
+            for match in matches:
+                # Check if secure features are set
+                snippet = code[match.start():match.start()+500]
+                if 'setFeature' not in snippet or 'disallow-doctype-decl' not in snippet:
+                    line_num = code[:match.start()].count('\n') + 1
+                    findings.append({
+                        'rule_id': 'java_xxe',
+                        'cwe_id': 'CWE-611',
+                        'severity': 'MEDIUM',
+                        'description': 'XXE vulnerability in XML parsing',
+                        'line': line_num,
+                        'matched_text': match.group(0),
+                        'remediation': 'Disable external entity processing',
+                        'confidence': 'MEDIUM'
+                    })
+        
+        return findings
+    
+    def _check_path_traversal(self, code: str) -> List[Dict[str, Any]]:
+        """Detect path traversal vulnerabilities (CWE-22)"""
+        findings = []
+        
+        # File operations with user input
+        pattern = r'new\s+File\s*\([^)]*\+[^)]*\)'
+        matches = re.finditer(pattern, code)
+        
+        for match in matches:
+            line_num = code[:match.start()].count('\n') + 1
+            findings.append({
+                'rule_id': 'java_path_traversal',
+                'cwe_id': 'CWE-22',
+                'severity': 'MEDIUM',
+                'description': 'Path traversal via file operations',
+                'line': line_num,
+                'matched_text': match.group(0)[:50],
+                'remediation': 'Validate and canonicalize file paths',
+                'confidence': 'MEDIUM'
+            })
+        
+        return findings

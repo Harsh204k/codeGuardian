@@ -1,221 +1,212 @@
-#!/usr/bin/env python3
 """
-Python static analysis using bandit for security vulnerability detection.
-Outputs findings in the same format as the main scanner.
+Python Static Code Analyzer
+Specialized analyzer for Python vulnerability detection
 """
-
-import json
-import subprocess
-import sys
-import tempfile
-import uuid
-from pathlib import Path
-from typing import List, Dict, Any
-from dataclasses import dataclass, asdict
-from engine.analyzers import normalize
+from typing import Dict, List, Any
+from .base_analyzer import BaseAnalyzer
+from ..features.static_feature_extractor import StaticFeatureExtractor
+import re
 
 
-@dataclass
-class Finding:
-    id: str
-    app: str
-    language: str
-    rule_id: str
-    name: str
-    file: str
-    line: int
-    snippet: str
-    cwe: str
-    owasp: str
-    severity: str
-    confidence: float
-    why: str
-    quickfix: dict = None
-
-
-# Mapping from bandit test IDs to CWE numbers
-BANDIT_CWE_MAPPING = {
-    "B101": "CWE-798",  # assert_used
-    "B102": "CWE-78",  # exec_used
-    "B103": "CWE-703",  # set_bad_file_permissions
-    "B104": "CWE-200",  # hardcoded_bind_all_interfaces
-    "B105": "CWE-798",  # hardcoded_password_string
-    "B106": "CWE-798",  # hardcoded_password_funcarg
-    "B107": "CWE-798",  # hardcoded_password_default
-    "B108": "CWE-377",  # hardcoded_tmp_directory
-    "B110": "CWE-703",  # try_except_pass
-    "B112": "CWE-703",  # try_except_continue
-    "B201": "CWE-95",  # flask_debug_true
-    "B301": "CWE-502",  # pickle
-    "B302": "CWE-295",  # marshal
-    "B303": "CWE-327",  # md5
-    "B304": "CWE-327",  # des
-    "B305": "CWE-327",  # cipher
-    "B306": "CWE-327",  # mktemp_q
-    "B307": "CWE-78",  # eval
-    "B308": "CWE-327",  # mark_safe
-    "B309": "CWE-295",  # httpsconnection
-    "B310": "CWE-330",  # urllib_urlopen
-    "B311": "CWE-330",  # random
-    "B312": "CWE-327",  # telnetlib
-    "B313": "CWE-79",  # xml_bad_cElementTree
-    "B314": "CWE-79",  # xml_bad_ElementTree
-    "B315": "CWE-79",  # xml_bad_expat
-    "B316": "CWE-79",  # xml_bad_minidom
-    "B317": "CWE-79",  # xml_bad_pulldom
-    "B318": "CWE-79",  # xml_bad_xmlrpc
-    "B319": "CWE-79",  # xml_bad_etree
-    "B320": "CWE-79",  # xml_bad_lxml
-    "B321": "CWE-295",  # ftplib
-    "B322": "CWE-776",  # input
-    "B323": "CWE-703",  # unverified_context
-    "B324": "CWE-327",  # hashlib_new_insecure_functions
-    "B325": "CWE-377",  # tempnam
-    "B401": "CWE-78",  # import_telnetlib
-    "B402": "CWE-295",  # import_ftplib
-    "B403": "CWE-502",  # import_pickle
-    "B404": "CWE-78",  # import_subprocess
-    "B405": "CWE-79",  # import_xml_etree
-    "B406": "CWE-79",  # import_xml_sax
-    "B407": "CWE-79",  # import_xml_expat
-    "B408": "CWE-79",  # import_xml_minidom
-    "B409": "CWE-79",  # import_xml_pulldom
-    "B410": "CWE-79",  # import_lxml
-    "B411": "CWE-79",  # import_xmlrpclib
-    "B412": "CWE-295",  # import_httpoxy
-    "B413": "CWE-502",  # import_pycrypto
-    "B501": "CWE-295",  # request_with_no_cert_validation
-    "B502": "CWE-295",  # ssl_with_bad_version
-    "B503": "CWE-295",  # ssl_with_bad_defaults
-    "B504": "CWE-295",  # ssl_with_no_version
-    "B505": "CWE-327",  # weak_cryptographic_key
-    "B506": "CWE-798",  # yaml_load
-    "B507": "CWE-79",  # ssh_no_host_key_verification
-    "B601": "CWE-77",  # paramiko_calls
-    "B602": "CWE-78",  # subprocess_popen_with_shell_equals_true
-    "B603": "CWE-78",  # subprocess_without_shell_equals_false
-    "B604": "CWE-78",  # any_other_function_with_shell_equals_true
-    "B605": "CWE-78",  # start_process_with_a_shell
-    "B606": "CWE-78",  # start_process_with_no_shell
-    "B607": "CWE-78",  # start_process_with_partial_path
-    "B608": "CWE-89",  # hardcoded_sql_expressions
-    "B609": "CWE-78",  # linux_commands_wildcard_injection
-    "B610": "CWE-79",  # django_extra_used
-    "B611": "CWE-79",  # django_rawsql_used
-    "B701": "CWE-703",  # jinja2_autoescape_false
-    "B702": "CWE-295",  # use_of_mako_templates
-    "B703": "CWE-79",  # django_mark_safe
-}
-
-# Severity mapping
-SEVERITY_MAPPING = {"LOW": "LOW", "MEDIUM": "MEDIUM", "HIGH": "HIGH"}
-
-# Confidence mapping
-CONFIDENCE_MAPPING = {"LOW": 0.3, "MEDIUM": 0.6, "HIGH": 0.9}
-
-
-def run_bandit_analysis(file_path: str, app_name: str = "App") -> List[Finding]:
-    """
-    Run bandit analysis on a Python file and return findings in consistent format.
-    """
-    findings = []
-
-    try:
-        # Run bandit with JSON output
-        cmd = ["bandit", "-f", "json", "-r", file_path]  # recursive
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode not in [0, 1]:  # bandit returns 1 when issues found
-            print(f"Warning: bandit returned code {result.returncode}", file=sys.stderr)
-            return findings
-
-        if not result.stdout.strip():
-            return findings
-
-        bandit_output = json.loads(result.stdout)
-
-        # Process bandit results
-        for result_item in bandit_output.get("results", []):
-            test_id = result_item.get("test_id", "UNKNOWN")
-
-            finding = Finding(
-                id=f"PY-{test_id}-{str(uuid.uuid4())[:8]}",
-                app=app_name,
-                language="python",
-                rule_id=f"PY-{test_id}",
-                name=result_item.get("test_name", "Security Issue"),
-                file=result_item.get("filename", ""),
-                line=result_item.get("line_number", 0),
-                snippet=result_item.get("code", "").strip()[:240],
-                cwe=BANDIT_CWE_MAPPING.get(test_id, "CWE-693"),
-                owasp=(
-                    "A03:2021-Injection"
-                    if test_id in ["B608", "B609"]
-                    else "A06:2021-Vulnerable Components"
-                ),
-                severity=SEVERITY_MAPPING.get(
-                    result_item.get("issue_severity", "MEDIUM"), "MEDIUM"
-                ),
-                confidence=CONFIDENCE_MAPPING.get(
-                    result_item.get("issue_confidence", "MEDIUM"), 0.6
-                ),
-                why=result_item.get("issue_text", "Security vulnerability detected"),
-                quickfix={
-                    "type": "suggest",
-                    "message": f"Review and fix: {result_item.get('issue_text', '')}",
-                },
+class PythonAnalyzer(BaseAnalyzer):
+    """Analyzer for Python code"""
+    
+    def __init__(self, language: str, rule_engine=None):
+        super().__init__(language, rule_engine)
+        self.feature_extractor = StaticFeatureExtractor()
+        
+        self.dangerous_functions = {
+            'eval', 'exec', 'compile', '__import__', 'input',
+            'pickle.loads', 'yaml.load', 'marshal.loads',
+            'os.system', 'subprocess.call', 'subprocess.Popen',
+            'open'
+        }
+        
+        self.security_apis = [
+            r'\beval\s*\(',
+            r'\bexec\s*\(',
+            r'\b__import__\s*\(',
+            r'\bpickle\.loads?\s*\(',
+            r'\byaml\.load\s*\(',
+            r'\bos\.system\s*\(',
+            r'\bsubprocess\.',
+            r'\bsql\s*=',
+        ]
+    
+    def analyze(self, code: str, record_id: str = None) -> Dict[str, Any]:
+        """Perform complete Python static analysis"""
+        metrics = self.extract_metrics(code)
+        vulnerabilities = self.detect_vulnerabilities(code)
+        static_flags = self.generate_static_flags(metrics, vulnerabilities)
+        severity_scores = self.calculate_severity_score(vulnerabilities)
+        detected_cwes = self.map_vulnerabilities_to_cwes(vulnerabilities)
+        overall_confidence = self.compute_overall_confidence(vulnerabilities)
+        
+        return {
+            'id': record_id,
+            'language': self.language,
+            'static_metrics': metrics,
+            'detected_cwes': detected_cwes,
+            'vulnerabilities': vulnerabilities,
+            'static_flags': static_flags,
+            'vulnerability_count': len(vulnerabilities),
+            'severity_scores': severity_scores,
+            'overall_confidence': overall_confidence
+        }
+    
+    def extract_metrics(self, code: str) -> Dict[str, Any]:
+        """Extract all static metrics for Python code"""
+        return self.feature_extractor.extract_all_features(code, self.language)
+    
+    def detect_vulnerabilities(self, code: str) -> List[Dict[str, Any]]:
+        """Detect Python specific vulnerabilities"""
+        vulnerabilities = []
+        
+        if self.rule_engine and self.rules:
+            metrics = self.extract_metrics(code)
+            vulnerabilities.extend(
+                self.rule_engine.execute_all_rules(self.rules, code, metrics)
             )
-            findings.append(finding)
-
-    except subprocess.TimeoutExpired:
-        print(f"Timeout running bandit on {file_path}", file=sys.stderr)
-    except FileNotFoundError:
-        print("bandit not found. Install with: pip install bandit", file=sys.stderr)
-    except json.JSONDecodeError as e:
-        print(f"Failed to parse bandit output: {e}", file=sys.stderr)
-    except Exception as e:
-        print(f"Error running bandit: {e}", file=sys.stderr)
-
-    return findings
-
-
-def analyze_python_file(file_path: str, app_name: str = "App") -> Dict[str, Any]:
-    """
-    Analyze a single Python file and return results in JSON format.
-    """
-    findings = run_bandit_analysis(file_path, app_name)
-
-    return {
-        "language": "python",
-        "file": file_path,
-        "analyzer": "bandit",
-        "findings_count": len(findings),
-        "findings": [asdict(f) for f in findings],
-    }
-
-
-def main():
-    """CLI interface for Python static analysis."""
-    if len(sys.argv) < 2:
-        print("Usage: python python_analyzer.py <file_or_directory> [app_name]")
-        sys.exit(1)
-
-    target_path = sys.argv[1]
-    app_name = sys.argv[2] if len(sys.argv) > 2 else "App"
-
-    if not Path(target_path).exists():
-        print(f"Error: {target_path} does not exist")
-        sys.exit(1)
-
-    result = analyze_python_file(target_path, app_name)
-    try:
-        normalized = normalize.normalize_result(result)
-        print(json.dumps(normalized, indent=2))
-    except Exception:
-        # Fallback to original result if normalization fails
-        print(json.dumps(result, indent=2))
-
-
-if __name__ == "__main__":
-    main()
+        
+        vulnerabilities.extend(self._check_code_injection(code))
+        vulnerabilities.extend(self._check_sql_injection(code))
+        vulnerabilities.extend(self._check_deserialization(code))
+        vulnerabilities.extend(self._check_path_traversal(code))
+        vulnerabilities.extend(self._check_xxe(code))
+        
+        return vulnerabilities
+    
+    def _check_code_injection(self, code: str) -> List[Dict[str, Any]]:
+        """Detect code injection via eval/exec (CWE-94)"""
+        findings = []
+        patterns = [
+            (r'\beval\s*\(', 'eval() with user input'),
+            (r'\bexec\s*\(', 'exec() with user input'),
+            (r'\bcompile\s*\(', 'compile() with user input'),
+            (r'\b__import__\s*\(', '__import__() can be dangerous'),
+        ]
+        
+        for pattern, desc in patterns:
+            matches = re.finditer(pattern, code)
+            for match in matches:
+                line_num = code[:match.start()].count('\n') + 1
+                findings.append({
+                    'rule_id': 'python_code_injection',
+                    'cwe_id': 'CWE-94',
+                    'severity': 'CRITICAL',
+                    'description': f'Code injection risk: {desc}',
+                    'line': line_num,
+                    'matched_text': match.group(0),
+                    'remediation': 'Avoid eval/exec; use ast.literal_eval for safe evaluation',
+                    'confidence': 'HIGH'
+                })
+        
+        return findings
+    
+    def _check_sql_injection(self, code: str) -> List[Dict[str, Any]]:
+        """Detect SQL injection vulnerabilities (CWE-89)"""
+        findings = []
+        
+        # String formatting in SQL queries
+        patterns = [
+            r'(execute|cursor\.execute)\s*\([^)]*%[^)]*\)',
+            r'(execute|cursor\.execute)\s*\([^)]*\.format\(',
+            r'(execute|cursor\.execute)\s*\([^)]*\+',
+            r'(sql|query)\s*=\s*["\'][^"\']*%[^"\']*["\']',
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, code, re.IGNORECASE)
+            for match in matches:
+                line_num = code[:match.start()].count('\n') + 1
+                findings.append({
+                    'rule_id': 'python_sql_injection',
+                    'cwe_id': 'CWE-89',
+                    'severity': 'HIGH',
+                    'description': 'SQL injection via string formatting',
+                    'line': line_num,
+                    'matched_text': match.group(0)[:50],
+                    'remediation': 'Use parameterized queries with placeholders',
+                    'confidence': 'MEDIUM'
+                })
+        
+        return findings
+    
+    def _check_deserialization(self, code: str) -> List[Dict[str, Any]]:
+        """Detect insecure deserialization (CWE-502)"""
+        findings = []
+        patterns = [
+            (r'\bpickle\.loads?\s*\(', 'Pickle deserialization'),
+            (r'\byaml\.load\s*\((?!.*Loader\s*=)', 'YAML unsafe load'),
+            (r'\bmarshal\.loads\s*\(', 'Marshal deserialization'),
+        ]
+        
+        for pattern, desc in patterns:
+            matches = re.finditer(pattern, code)
+            for match in matches:
+                line_num = code[:match.start()].count('\n') + 1
+                findings.append({
+                    'rule_id': 'python_deserialization',
+                    'cwe_id': 'CWE-502',
+                    'severity': 'HIGH',
+                    'description': f'Insecure deserialization: {desc}',
+                    'line': line_num,
+                    'matched_text': match.group(0),
+                    'remediation': 'Use safe alternatives like json.loads or yaml.safe_load',
+                    'confidence': 'HIGH'
+                })
+        
+        return findings
+    
+    def _check_path_traversal(self, code: str) -> List[Dict[str, Any]]:
+        """Detect path traversal vulnerabilities (CWE-22)"""
+        findings = []
+        
+        # open() with user input without validation
+        pattern = r'\bopen\s*\([^)]*\+[^)]*\)'
+        matches = re.finditer(pattern, code)
+        
+        for match in matches:
+            line_num = code[:match.start()].count('\n') + 1
+            findings.append({
+                'rule_id': 'python_path_traversal',
+                'cwe_id': 'CWE-22',
+                'severity': 'MEDIUM',
+                'description': 'Path traversal via file operations',
+                'line': line_num,
+                'matched_text': match.group(0)[:50],
+                'remediation': 'Validate and sanitize file paths',
+                'confidence': 'MEDIUM'
+            })
+        
+        return findings
+    
+    def _check_xxe(self, code: str) -> List[Dict[str, Any]]:
+        """Detect XML External Entity injection (CWE-611)"""
+        findings = []
+        
+        # XML parsing without disabling external entities
+        patterns = [
+            r'\bxml\.etree\.ElementTree\.parse\s*\(',
+            r'\bxml\.sax\.parse\s*\(',
+            r'\blxml\.etree\.',
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, code)
+            for match in matches:
+                # Check if defusedxml is used
+                if 'defusedxml' not in code[:match.start()]:
+                    line_num = code[:match.start()].count('\n') + 1
+                    findings.append({
+                        'rule_id': 'python_xxe',
+                        'cwe_id': 'CWE-611',
+                        'severity': 'MEDIUM',
+                        'description': 'XXE vulnerability in XML parsing',
+                        'line': line_num,
+                        'matched_text': match.group(0),
+                        'remediation': 'Use defusedxml library',
+                        'confidence': 'MEDIUM'
+                    })
+        
+        return findings

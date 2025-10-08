@@ -1,0 +1,46 @@
+# CWE-78: OS Command Injection Rules
+
+rules:
+  - id: command_injection_exec
+    name: "Command Injection via exec functions"
+    cwe_id: "CWE-78"
+    severity: HIGH
+    confidence: HIGH
+    type: api_call
+    api_names: [exec, system, popen, shell_exec, passthru, proc_open, Runtime.exec]
+    description: "OS command execution with potential user input"
+    remediation: "Avoid shell execution; use safe APIs or validate input strictly"
+    languages: [all]
+    
+  - id: command_injection_subprocess
+    name: "Command Injection via subprocess"
+    cwe_id: "CWE-78"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '(subprocess\.|os\.system|os\.popen|commands\.getoutput)\s*\([^)]*\+[^)]*\)'
+    description: "Subprocess call with string concatenation"
+    remediation: "Use subprocess with shell=False and pass arguments as list"
+    languages: [python]
+    
+  - id: command_injection_backticks
+    name: "Command Injection via backticks"
+    cwe_id: "CWE-78"
+    severity: HIGH
+    confidence: HIGH
+    type: regex
+    pattern: '`[^`]*\$'
+    description: "Backtick command execution with variables"
+    remediation: "Avoid shell execution or sanitize inputs"
+    languages: [php, ruby, javascript]
+    
+  - id: command_injection_child_process
+    name: "Command Injection via child_process"
+    cwe_id: "CWE-78"
+    severity: HIGH
+    confidence: MEDIUM
+    type: regex
+    pattern: '(child_process\.exec|child_process\.spawn)\s*\([^)]*\+[^)]*\)'
+    description: "Node.js child process with string concatenation"
+    remediation: "Use spawn with array of arguments"
+    languages: [javascript]

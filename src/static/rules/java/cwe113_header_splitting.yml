@@ -1,9 +1,0 @@
-id: JAVA.CWE113.HEADER_SPLIT.TAINT
-name: Untrusted data in HTTP response header
-cwe: CWE-113
-owasp: A03:2021-Injection
-severity: high
-languages: [java]
-patterns:
-  - '(addHeader|setHeader)\s*\(\s*".*?"\s*,\s*.*(getParameter|getHeader|getQueryString|getCookies|getRequestURI|getReader\s*\(\)\.readLine)\s*\('
-  - 'sendRedirect\s*\(\s*.*(getParameter|getHeader|getQueryString|getCookies|getRequestURI|getReader\s*\(\)\.readLine)\s*\('

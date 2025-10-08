@@ -50,13 +50,14 @@ from scripts.utils.report_generator import generate_pipeline_report
 
 DEFAULT_CONFIG = {
     'pipeline': {
-        'stages': ['preprocessing', 'normalization', 'validation', 'feature_engineering', 'splitting'],
+        'stages': ['preprocessing', 'normalization', 'validation', 'feature_engineering', 'splitting', 'static_analysis'],
         'enable': {
             'preprocessing': True,
             'normalization': True,
             'validation': True,
             'feature_engineering': True,
-            'splitting': True
+            'splitting': True,
+            'static_analysis': False  # Disabled by default, enable with --static-analysis flag
         },
         'resume_from': None,
         'skip': []
@@ -234,7 +235,8 @@ class IntegrityChecker:
             'normalization': ['datasets/unified/processed_all.jsonl'],
             'validation': ['datasets/unified/validated.jsonl', 'datasets/unified/validation_report.json'],
             'feature_engineering': ['datasets/features/features_static.csv'],
-            'splitting': ['datasets/processed/train.jsonl', 'datasets/processed/val.jsonl', 'datasets/processed/test.jsonl']
+            'splitting': ['datasets/processed/train.jsonl', 'datasets/processed/val.jsonl', 'datasets/processed/test.jsonl'],
+            'static_analysis': ['src/static/outputs/static_flags_train.csv', 'src/static/outputs/static_flags_val.csv', 'src/static/outputs/static_flags_test.csv']
         }
         
         if stage not in stage_outputs:
@@ -344,12 +346,48 @@ class EnhancedPipelineOrchestrator:
         
         In production, this would import and call the actual modules.
         """
-        # This is a placeholder - in real implementation, you would:
-        # 1. Import the module dynamically
-        # 2. Call its run() function
-        # 3. Capture and return success/failure
-        
         self.logger.info(f"Executing {stage}...")
+        
+        # Special handling for static_analysis stage
+        if stage == 'static_analysis':
+            try:
+                from pathlib import Path
+                import subprocess
+                
+                # Run static analysis on all splits
+                script_path = Path('src/static/run_static_analysis.py')
+                
+                if not script_path.exists():
+                    self.logger.error(f"Static analysis script not found: {script_path}")
+                    return False
+                
+                self.logger.info("Running static analysis on all dataset splits...")
+                
+                # Run the static analysis script
+                result = subprocess.run(
+                    [sys.executable, str(script_path), '--split', 'all'],
+                    capture_output=True,
+                    text=True,
+                    timeout=3600  # 1 hour timeout
+                )
+                
+                if result.returncode == 0:
+                    self.logger.info("Static analysis completed successfully")
+                    self.logger.info(result.stdout)
+                    return True
+                else:
+                    self.logger.error(f"Static analysis failed with return code {result.returncode}")
+                    self.logger.error(result.stderr)
+                    return False
+                    
+            except subprocess.TimeoutExpired:
+                self.logger.error("Static analysis timed out after 1 hour")
+                return False
+            except Exception as e:
+                self.logger.error(f"Error running static analysis: {e}")
+                return False
+        
+        # For other stages, placeholder implementation
         time.sleep(0.1)  # Simulate work
         return True
     
@@ -515,6 +553,12 @@ def main():
     )
     
     parser.add_argument(
+        "--static-analysis",
+        action="store_true",
+        help="Enable static code analysis stage (Phase 3)"
+    )
+    
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -533,6 +577,14 @@ def main():
         if 'pipeline' not in config:
             config['pipeline'] = {}
         config['pipeline']['skip'] = args.skip
+    
+    # Enable static analysis if requested
+    if args.static_analysis:
+        if 'pipeline' not in config:
+            config['pipeline'] = {}
+        if 'enable' not in config['pipeline']:
+            config['pipeline']['enable'] = {}
+        config['pipeline']['enable']['static_analysis'] = True
     
     # Create orchestrator
     orchestrator = EnhancedPipelineOrchestrator(

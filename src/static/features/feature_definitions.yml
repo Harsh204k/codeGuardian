@@ -1,0 +1,151 @@
+# Static Feature Definitions (M1-M15)
+# Defines the metrics extracted for vulnerability prediction
+
+features:
+  - name: M1_cyclomatic_complexity
+    description: "Cyclomatic complexity - measures decision points in code"
+    formula: "Count(if, for, while, case, catch, &&, ||, ?) + 1"
+    type: integer
+    range: [1, inf]
+    high_risk_threshold: 10
+    
+  - name: M2_nesting_depth
+    description: "Maximum nesting depth of code blocks"
+    formula: "Max depth of nested braces/blocks"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 4
+    
+  - name: M3_function_call_count
+    description: "Number of function/method calls"
+    formula: "Count(identifier followed by '(')"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 50
+    
+  - name: M4_lines_of_code
+    description: "Non-empty, non-comment lines of code"
+    formula: "Count(non-blank, non-comment lines)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 500
+    
+  - name: M5_string_literal_count
+    description: "Number of string literals (potential injection points)"
+    formula: "Count('...' or \"...\" or `...`)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 20
+    
+  - name: M6_numeric_literal_count
+    description: "Number of numeric literals"
+    formula: "Count(integers, floats, hex, binary)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 30
+    
+  - name: M7_api_call_count
+    description: "Count of security-relevant API calls"
+    formula: "Count(network, database, file, process, crypto APIs)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 10
+    
+  - name: M8_dangerous_function_count
+    description: "Number of dangerous/deprecated functions used"
+    formula: "Count(strcpy, eval, exec, system, etc.)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 1
+    
+  - name: M9_comment_ratio
+    description: "Ratio of comment lines to total lines"
+    formula: "comment_lines / total_lines"
+    type: float
+    range: [0.0, 1.0]
+    low_risk_threshold: 0.2
+    
+  - name: M10_import_count
+    description: "Number of imported modules/libraries"
+    formula: "Count(unique imports)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 20
+    
+  - name: M11_variable_count
+    description: "Number of variable declarations"
+    formula: "Count(var, let, const, type declarations)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 50
+    
+  - name: M12_conditional_count
+    description: "Number of conditional statements"
+    formula: "Count(if, else, switch, case, ternary)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 20
+    
+  - name: M13_loop_count
+    description: "Number of loop constructs"
+    formula: "Count(for, while, do, foreach, map, filter)"
+    type: integer
+    range: [0, inf]
+    high_risk_threshold: 10
+    
+  - name: M14_exception_handling_count
+    description: "Number of exception handling blocks"
+    formula: "Count(try, catch, except, finally, throw, raise)"
+    type: integer
+    range: [0, inf]
+    low_risk_threshold: 1
+    
+  - name: M15_code_complexity_score
+    description: "Aggregate code complexity score (weighted combination)"
+    formula: "Weighted sum of M1, M2, M3, M4, M12, M13 (normalized to 0-100)"
+    type: float
+    range: [0.0, 100.0]
+    high_risk_threshold: 60.0
+    weights:
+      M1_cyclomatic_complexity: 0.25
+      M2_nesting_depth: 0.20
+      M3_function_call_count: 0.10
+      M4_lines_of_code: 0.15
+      M12_conditional_count: 0.15
+      M13_loop_count: 0.15
+
+# Feature groups for analysis
+feature_groups:
+  complexity_metrics:
+    - M1_cyclomatic_complexity
+    - M2_nesting_depth
+    - M15_code_complexity_score
+    
+  size_metrics:
+    - M3_function_call_count
+    - M4_lines_of_code
+    - M11_variable_count
+    
+  security_indicators:
+    - M5_string_literal_count
+    - M7_api_call_count
+    - M8_dangerous_function_count
+    
+  quality_metrics:
+    - M9_comment_ratio
+    - M14_exception_handling_count
+    
+  control_flow_metrics:
+    - M12_conditional_count
+    - M13_loop_count
+
+# Usage notes
+notes: |
+  These features are extracted during static analysis and used as input
+  to the XGBoost fusion model alongside deep learning embeddings.
+  
+  High-risk thresholds indicate values that correlate with vulnerability presence.
+  Low-risk thresholds indicate minimum recommended values for code quality.
+  
+  Features M1-M14 are direct measurements.
+  Feature M15 is a derived aggregate score.
