@@ -1,0 +1,101 @@
+﻿rules:
+  - id: CPP-BO-STRCPY
+    name: "Unsafe strcpy/sprintf/gets (buffer overflow risk)"
+    pattern: "(?m)\\b(strcpy|sprintf|gets)\\s*\\("
+    cwe: "CWE-120"
+    owasp: "â€”"
+    severity: "CRITICAL"
+    confidence: 0.9
+    why: "Unbounded copy into fixed buffers can overflow."
+    fix:
+      type: "suggest"
+      message: "Use strncpy/snprintf with bounds or safer wrappers."
+
+  - id: CPP-FMT-001
+    name: "Format string vulnerability"
+    pattern: "(?m)printf\\s*\\(\\s*\\w+\\s*\\)"
+    cwe: "CWE-134"
+    owasp: "â€”"
+    severity: "HIGH"
+    confidence: 0.75
+    why: "User-controlled format strings can lead to memory disclosure/RCE."
+    fix:
+      type: "suggest"
+      message: "Use constant format string; never pass user input as format."
+
+  # ===== MEMORY MANAGEMENT (CWE-401, CWE-416) =====
+  - id: CPP-MEM-001
+    name: "Memory leak - missing delete"
+    pattern: "(?s)new\\s+\\w+.*(?!delete)"
+    cwe: "CWE-401"
+    owasp: "A06:2021-Vulnerable and Outdated Components"
+    severity: "MEDIUM"
+    confidence: 0.6
+    why: "Allocated memory without corresponding delete causes leaks."
+    fix:
+      type: "suggest"
+      message: "Use smart pointers or ensure proper delete calls."
+
+  - id: CPP-MEM-002
+    name: "Use after free vulnerability"
+    pattern: "(?s)delete\\s+(\\w+).*\\1\\s*->"
+    cwe: "CWE-416"
+    owasp: "A06:2021-Vulnerable and Outdated Components"
+    severity: "CRITICAL"
+    confidence: 0.8
+    why: "Accessing freed memory can lead to crashes or exploitation."
+    fix:
+      type: "suggest"
+      message: "Set pointer to nullptr after delete or use smart pointers."
+
+  # ===== INTEGER OVERFLOW (CWE-190) =====
+  - id: CPP-INT-001
+    name: "Integer overflow vulnerability"
+    pattern: "(?m)(int|short)\\s+\\w+.*\\+\\s*\\w+(?!.*check)"
+    cwe: "CWE-190"
+    owasp: "A04:2021-Insecure Design"
+    severity: "MEDIUM"
+    confidence: 0.5
+    why: "Unchecked integer arithmetic can overflow."
+    fix:
+      type: "suggest"
+      message: "Check for overflow before arithmetic operations."
+
+  # ===== RACE CONDITIONS (CWE-362) =====
+  - id: CPP-RACE-001
+    name: "Race condition in file operations"
+    pattern: "(?s)access\\([^)]+\\)[^}]*fopen\\("
+    cwe: "CWE-362"
+    owasp: "A04:2021-Insecure Design"
+    severity: "MEDIUM"
+    confidence: 0.7
+    why: "Time-of-check time-of-use race condition."
+    fix:
+      type: "suggest"
+      message: "Use atomic file operations or proper locking."
+
+  # ===== COMMAND INJECTION (CWE-78) =====
+  - id: CPP-CMDI-001
+    name: "Command injection via system"
+    pattern: "(?m)system\\s*\\([^)]*\\+"
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "User input in system() calls enables command injection."
+    fix:
+      type: "suggest"
+      message: "Use execve() family functions or validate input strictly."
+
+  # ===== NULL POINTER DEREFERENCE (CWE-476) =====
+  - id: CPP-NULL-001
+    name: "Potential null pointer dereference"
+    pattern: "(?s)\\*\\w+(?!.*nullptr.*check|.*NULL.*check)"
+    cwe: "CWE-476"
+    owasp: "A06:2021-Vulnerable and Outdated Components"
+    severity: "MEDIUM"
+    confidence: 0.4
+    why: "Dereferencing without null check can crash application."
+    fix:
+      type: "suggest"
+      message: "Check for null before dereferencing pointers."

@@ -1,0 +1,14 @@
+id: JAVA.CWE611.XXE.UNSAFE_FEATURE
+name: Unsafe XML parser features (XXE)
+cwe: CWE-611
+owasp: A05:2021-Security Misconfiguration
+severity: high
+languages: [java]
+patterns:
+  - 'DocumentBuilderFactory\.newInstance\('
+  - 'SAXParserFactory\.newInstance\('
+  - 'XMLInputFactory\.newInstance\('
+  - 'setFeature\s*\(\s*"http://xml\.org/sax/features/external-general-entities"\s*,\s*true\s*\)'
+  - 'setFeature\s*\(\s*"http://xml\.org/sax/features/external-parameter-entities"\s*,\s*true\s*\)'
+  - 'setExpandEntityReferences\s*\(\s*true\s*\)'
+  - 'XMLInputFactory\.setProperty\s*\(\s*"javax\.xml\.stream\.isSupportingExternalEntities"\s*,\s*true\s*\)'

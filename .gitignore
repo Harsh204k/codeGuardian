@@ -1,0 +1,156 @@
+﻿# =============================================================================
+# CODEGUARDIAN VULNERABILITY DETECTION TOOL - GITIGNORE
+# =============================================================================
+
+# Python Runtime & Compilation
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+*.dylib
+*.exe
+
+# Python Distribution & Packaging
+# -----------------------------------------------------------------------------
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+*.whl
+*.tar.gz
+*.zip
+
+# Virtual Environments
+# -----------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# Static Analysis Tools and Binaries
+# -----------------------------------------------------------------------------
+/tools/
+
+# Development Tools & Caches
+# -----------------------------------------------------------------------------
+pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+
+# IDE & Editor Settings
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Files
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# =============================================================================
+# CODEGUARDIAN SPECIFIC FILES
+# =============================================================================
+
+# Project Build Artifacts
+# -----------------------------------------------------------------------------
+codeguardian.egg-info/
+
+# Machine Learning Models & Training Data
+# -----------------------------------------------------------------------------
+models/
+!models/.gitkeep
+models/**/
+*.pkl
+*.joblib
+*.model
+*.bin
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.onnx
+*.tflite
+
+# Datasets & Training Data
+# -----------------------------------------------------------------------------
+datasets/
+!datasets/.gitkeep
+datasets/cache/
+*.jsonl
+*.parquet
+DiverseVul*/
+Juliet/
+Zenodo/
+tools/
+
+# Scan Results & Reports
+# -----------------------------------------------------------------------------
+reports/
+*.sarif
+*.html
+*.xlsx
+*.analysis
+*.report
+*.summary
+
+# Logs & Debug Files
+# -----------------------------------------------------------------------------
+*.log
+*.log.*
+debug*.py
+debug_*.py
+monitor_*.py
+temp_*.py
+test_*.py
+simple_test.py
+*.tmp
+*.temp
+*.debug
+
+# Database Files
+# -----------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+
+# Configuration & Secrets
+# -----------------------------------------------------------------------------
+.env
+.env.*
+secrets.json
+*.key
+*.pem
+*.cert
+
+# Performance & Profiling
+# -----------------------------------------------------------------------------
+*.prof
+*.profile
+
+# =============================================================================
+# KEEP ESSENTIAL STRUCTURE FILES
+# =============================================================================
+!.gitkeep
+!README.md
+!requirements*.txt
+!cache
+!pyproject.toml
+!setup.py
+!pytest.ini
+!demos/
+!rules/
+!engine/
+tools/js/*
+tools/spotbugs/*
+!tests/

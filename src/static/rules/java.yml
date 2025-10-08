@@ -1,0 +1,380 @@
+﻿rules:
+  # ===== SQL INJECTION (CWE-89) =====
+  - id: JAVA-SQLI-001
+    name: "SQL Injection via Statement concatenation"
+    pattern: '(?s)(Statement\s+\w+\s*=.*createStatement\(\)|\.createStatement\(\)).*?(executeQuery|executeUpdate|execute)\s*\(\s*"[^"]*"\s*\+.*?\)'
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "String concatenation in SQL queries enables injection attacks."
+    fix:
+      type: "suggest"
+      message: "Use PreparedStatement with parameterized queries."
+
+  - id: JAVA-SQLI-002
+    name: "SQL Injection via request parameter concatenation"
+    pattern: '(?s)(executeQuery|executeUpdate|execute)\s*\(\s*"[^"]*"\s*\+.*?(getParameter|getQueryString|getHeader)\s*\('
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "CRITICAL"
+    confidence: 0.9
+    why: "Direct concatenation of user input into SQL queries."
+    fix:
+      type: "suggest"
+      message: "Use PreparedStatement with setString() for user input."
+
+  - id: JAVA-SQLI-003
+    name: "SQL Injection via StringBuilder/StringBuffer"
+    pattern: '(?s)(StringBuilder|StringBuffer).*?(append\s*\([^)]*?(getParameter|getQueryString|getHeader|readLine)\s*\()[^)]*?\).*?(executeQuery|executeUpdate|execute)\s*\(.*?toString\(\)'
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Building SQL queries with user input via StringBuilder/StringBuffer."
+    fix:
+      type: "suggest"
+      message: "Use PreparedStatement instead of dynamic query building."
+
+  - id: JAVA-SQLI-004
+    name: "SQL Injection via simple string concatenation"
+    pattern: "(?s)(executeQuery|executeUpdate|execute)\\s*\\(\\s*\"[^\"]*\"\\s*\\+\\s*\\w+"
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "CRITICAL"
+    confidence: 0.9
+    why: "Direct string concatenation in SQL queries enables injection."
+    fix:
+      type: "suggest"
+      message: "Use PreparedStatement with parameterized queries."
+
+  - id: JAVA-SQLI-005
+    name: "SQL Injection via variable concatenation"
+    pattern: '(?s)String\s+\w+\s*=\s*"[^"]*SELECT\s+.*?"\s*\+.*?(getParameter|username|password|\w+Input)'
+    cwe: "CWE-89"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "Building SQL queries with string concatenation enables injection."
+    fix:
+      type: "suggest"
+      message: "Use PreparedStatement with ? placeholders."
+
+  - id: JAVA-SQLI-006
+    name: "SQL Injection via multiline string concatenation"
+    pattern: '(?s)"[^"]*SELECT\s+.*?"\s*\+\s*\w+.*?\+.*?".*?"'
+    cwe: "CWE-89"  
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "Multi-line string concatenation in SQL queries."
+    fix:
+      type: "suggest"
+      message: "Use PreparedStatement with parameterized queries."
+
+  # ===== COMMAND INJECTION (CWE-78) =====
+  - id: JAVA-CMDI-001
+    name: "Command Injection via Runtime.exec"
+    pattern: 'Runtime\.getRuntime\(\)\.exec\s*\([^)]*?(getParameter|getQueryString|getHeader|readLine|args\[)'
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "CRITICAL"
+    confidence: 0.9
+    why: "Executing system commands with user-controlled input."
+    fix:
+      type: "suggest"
+      message: "Validate and sanitize all user input before command execution."
+
+  - id: JAVA-CMDI-002
+    name: "Command Injection via ProcessBuilder"
+    pattern: 'new ProcessBuilder\s*\([^)]*?(getParameter|getQueryString|getHeader|readLine|args\[)'
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "CRITICAL"
+    confidence: 0.9
+    why: "ProcessBuilder with user input can lead to command injection."
+    fix:
+      type: "suggest"
+      message: "Use allowlist validation for command arguments."
+
+  - id: JAVA-CMDI-003
+    name: "Command Injection via Runtime.exec with concatenation"
+    pattern: "Runtime\\.getRuntime\\(\\)\\.exec\\s*\\([^\\)]*\"[^\"]*\"\\s*\\+\\s*\\w+"
+    cwe: "CWE-78"
+    owasp: "A03:2021-Injection"
+    severity: "CRITICAL"
+    confidence: 0.95
+    why: "String concatenation in command execution enables injection."
+    fix:
+      type: "suggest"
+      message: "Validate and sanitize all command arguments."
+
+  # ===== XSS (CWE-79) =====
+  - id: JAVA-XSS-001
+    name: "Reflected XSS via PrintWriter"
+    pattern: '(?s)(PrintWriter|getWriter\(\)).*?(print|println)\s*\([^)]*?(getParameter|getQueryString|getHeader)\s*\('
+    cwe: "CWE-79"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "Outputting user input without encoding enables XSS."
+    fix:
+      type: "suggest"
+      message: "HTML-encode user input before output using OWASP Encoder."
+
+  - id: JAVA-XSS-002
+    name: "XSS via JSP expression"
+    pattern: '<%=.*?(getParameter|getQueryString|getHeader)\s*\([^)]*?\)\s*%>'
+    cwe: "CWE-79"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "JSP expression outputs user input without encoding."
+    fix:
+      type: "suggest"
+      message: "Use c:out tag or HTML encoding for user data."
+
+  # ===== PATH TRAVERSAL (CWE-22) =====
+  - id: JAVA-PATH-001
+    name: "Path Traversal via File constructor"
+    pattern: 'new File\s*\([^)]*?(getParameter|getQueryString|getHeader|readLine)\s*\('
+    cwe: "CWE-22"
+    owasp: "A01:2021-Broken Access Control"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "User input in file paths can lead to directory traversal."
+    fix:
+      type: "suggest"
+      message: "Validate file paths and use canonical path checking."
+
+  - id: JAVA-PATH-002
+    name: "Path Traversal via FileInputStream"
+    pattern: 'new FileInputStream\s*\([^)]*?(getParameter|getQueryString|getHeader|readLine)\s*\('
+    cwe: "CWE-22"
+    owasp: "A01:2021-Broken Access Control"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "Direct file access with user input enables path traversal."
+    fix:
+      type: "suggest"
+      message: "Use allowlist of permitted files/directories."
+
+  # ===== XXE (CWE-611) =====
+  - id: JAVA-XXE-001
+    name: "XXE via DocumentBuilderFactory"
+    pattern: 'DocumentBuilderFactory\.newInstance\(\)(?!.*setFeature.*XMLConstants\.FEATURE_SECURE_PROCESSING)'
+    cwe: "CWE-611"
+    owasp: "A05:2021-Security Misconfiguration"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Default DocumentBuilderFactory is vulnerable to XXE attacks."
+    fix:
+      type: "suggest"
+      message: "Disable external entities: setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)."
+
+  - id: JAVA-XXE-002
+    name: "XXE via SAXParserFactory"
+    pattern: 'SAXParserFactory\.newInstance\(\)(?!.*setFeature.*XMLConstants\.FEATURE_SECURE_PROCESSING)'
+    cwe: "CWE-611"
+    owasp: "A05:2021-Security Misconfiguration"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "Default SAXParserFactory allows XXE attacks."
+    fix:
+      type: "suggest"
+      message: "Configure secure XML processing to prevent XXE."
+
+  # ===== WEAK CRYPTOGRAPHY (CWE-327) =====
+  - id: JAVA-CRYPTO-001
+    name: "Weak cryptography - MD5"
+    pattern: "MessageDigest\\.getInstance\\s*\\(\\s*[\"']MD5[\"']\\s*\\)"
+    cwe: "CWE-327"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "MEDIUM"
+    confidence: 0.95
+    why: "MD5 is cryptographically broken and should not be used."
+    fix:
+      type: "replace"
+      message: "Use SHA-256 or stronger algorithm."
+      replace_hint: "MessageDigest.getInstance(\"SHA-256\")"
+
+  - id: JAVA-CRYPTO-002
+    name: "Weak cryptography - SHA1"
+    pattern: "MessageDigest\\.getInstance\\s*\\(\\s*[\"']SHA-?1[\"']\\s*\\)"
+    cwe: "CWE-327"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "MEDIUM"
+    confidence: 0.9
+    why: "SHA-1 is deprecated due to collision vulnerabilities."
+    fix:
+      type: "replace"
+      message: "Use SHA-256 or stronger algorithm."
+      replace_hint: "MessageDigest.getInstance(\"SHA-256\")"
+
+  - id: JAVA-CRYPTO-003
+    name: "Weak cipher - DES"
+    pattern: "Cipher\\.getInstance\\s*\\(\\s*[\"'][^\"']*DES[^\"']*[\"']\\s*\\)"
+    cwe: "CWE-327"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "HIGH"
+    confidence: 0.95
+    why: "DES encryption is obsolete and easily broken."
+    fix:
+      type: "suggest"
+      message: "Use AES with CBC or GCM mode instead."
+
+  - id: JAVA-CRYPTO-004
+    name: "Weak cipher - ECB mode"
+    pattern: "Cipher\\.getInstance\\s*\\(\\s*[\"'][^\"']*ECB[^\"']*[\"']\\s*\\)"
+    cwe: "CWE-327"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "MEDIUM"
+    confidence: 0.9
+    why: "ECB mode reveals patterns in encrypted data."
+    fix:
+      type: "suggest"
+      message: "Use CBC or GCM mode with random IV."
+
+  # ===== INSECURE RANDOMNESS (CWE-330) =====
+  - id: JAVA-RANDOM-001
+    name: "Weak random number generation"
+    pattern: "new Random\\s*\\(\\s*\\)"
+    cwe: "CWE-330"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "LOW"
+    confidence: 0.7
+    why: "java.util.Random is not cryptographically secure."
+    fix:
+      type: "suggest"
+      message: "Use SecureRandom for security-sensitive operations."
+
+  # ===== LDAP INJECTION (CWE-90) =====
+  - id: JAVA-LDAP-001
+    name: "LDAP Injection"
+    pattern: "(?s)(InitialDirContext|search)\\s*\\([^)]*?(getParameter|getQueryString|getHeader)\\s*\\("
+    cwe: "CWE-90"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "User input in LDAP queries enables injection attacks."
+    fix:
+      type: "suggest"
+      message: "Escape LDAP special characters in user input."
+
+  # ===== TRUST BOUNDARY VIOLATIONS =====
+  - id: JAVA-TRUST-001
+    name: "Trust boundary violation via session"
+    pattern: "(?s)session\\.setAttribute\\s*\\([^,]+,\\s*[^)]*?(getParameter|getQueryString|getHeader)\\s*\\("
+    cwe: "CWE-501"
+    owasp: "A04:2021-Insecure Design"
+    severity: "MEDIUM"
+    confidence: 0.75
+    why: "Storing untrusted user input in session without validation."
+    fix:
+      type: "suggest"
+      message: "Validate and sanitize user input before storing in session."
+
+  # ===== INSECURE DESERIALIZATION (CWE-502) =====
+  - id: JAVA-DESER-001
+    name: "Insecure object deserialization"
+    pattern: "(?s)ObjectInputStream.*readObject\\(\\)"
+    cwe: "CWE-502"
+    owasp: "A08:2021-Software and Data Integrity Failures"
+    severity: "CRITICAL"
+    confidence: 0.9
+    why: "Deserializing untrusted data can lead to remote code execution."
+    fix:
+      type: "suggest"
+      message: "Use safe serialization formats or validate serialized data."
+
+  # ===== XML EXTERNAL ENTITY (CWE-611) =====
+  - id: JAVA-XXE-001
+    name: "XML External Entity injection"
+    pattern: "(?s)DocumentBuilderFactory.*newDocumentBuilder\\(\\).*parse\\("
+    cwe: "CWE-611"
+    owasp: "A05:2021-Security Misconfiguration"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "XML parsing without XXE protection allows file disclosure."
+    fix:
+      type: "suggest"
+      message: "Disable external entity processing in XML parsers."
+
+  - id: JAVA-XXE-002
+    name: "SAX Parser XXE vulnerability"
+    pattern: "(?s)SAXParserFactory.*newSAXParser\\(\\).*parse\\("
+    cwe: "CWE-611"
+    owasp: "A05:2021-Security Misconfiguration"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "SAX parser vulnerable to XXE without proper configuration."
+    fix:
+      type: "suggest"
+      message: "Disable DTD processing and external entities."
+
+  # ===== LDAP INJECTION (CWE-90) =====
+  - id: JAVA-LDAPI-001
+    name: "LDAP injection vulnerability"
+    pattern: "(?s)search\\s*\\([^)]*\\+[^)]*request\\.(getParameter|getAttribute)"
+    cwe: "CWE-90"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "User input in LDAP queries can lead to injection attacks."
+    fix:
+      type: "suggest"
+      message: "Use parameterized LDAP queries and input validation."
+
+  # ===== SERVER-SIDE REQUEST FORGERY (CWE-918) =====
+  - id: JAVA-SSRF-001
+    name: "Server-side Request Forgery"
+    pattern: "(?s)(URL|HttpURLConnection|HttpClient).*\\(.*request\\.(getParameter|getAttribute)"
+    cwe: "CWE-918"
+    owasp: "A10:2021-Server-Side Request Forgery"
+    severity: "HIGH"
+    confidence: 0.8
+    why: "User-controlled URLs in HTTP requests enable SSRF attacks."
+    fix:
+      type: "suggest"
+      message: "Validate URLs against allowlist and restrict protocols."
+
+  # ===== WEAK AUTHENTICATION (CWE-287) =====
+  - id: JAVA-AUTH-001
+    name: "Hardcoded credentials"
+    pattern: "(?m)(password|pwd|secret|key)\\s*=\\s*[\"'][^\"']{3,}[\"']"
+    cwe: "CWE-798"
+    owasp: "A07:2021-Identification and Authentication Failures"
+    severity: "HIGH"
+    confidence: 0.9
+    why: "Hardcoded credentials pose security risk."
+    fix:
+      type: "suggest"
+      message: "Use environment variables or secure configuration files."
+
+  # ===== INSECURE RANDOM (CWE-330) =====
+  - id: JAVA-RANDOM-001
+    name: "Weak random number generation"
+    pattern: "(?m)new\\s+Random\\(\\)|Math\\.random\\(\\)"
+    cwe: "CWE-330"
+    owasp: "A02:2021-Cryptographic Failures"
+    severity: "MEDIUM"
+    confidence: 0.7
+    why: "Standard Random is not cryptographically secure."
+    fix:
+      type: "suggest"
+      message: "Use SecureRandom for cryptographic operations."
+
+  # ===== EXPRESSION LANGUAGE INJECTION (CWE-917) =====
+  - id: JAVA-ELI-001
+    name: "Expression Language injection"
+    pattern: "(?s)\\$\\{.*request\\.(getParameter|getAttribute)"
+    cwe: "CWE-917"
+    owasp: "A03:2021-Injection"
+    severity: "HIGH"
+    confidence: 0.85
+    why: "User input in EL expressions can lead to code execution."
+    fix:
+      type: "suggest"
+      message: "Sanitize user input before using in EL expressions."
+
+

@@ -1,0 +1,61 @@
+###############################
+# Core Dependencies
+###############################
+pyyaml>=6.0
+regex>=2023.0.0
+openpyxl>=3.1.0
+rich>=13.0.0
+requests>=2.31.0
+click>=8.0.0
+tqdm>=4.64.0
+pathlib2>=2.3.0; python_version < '3.4'
+
+###############################
+# Web Frameworks (choose one or both if needed)
+###############################
+django>=4.2.0
+flask>=2.3.0
+
+###############################
+# Machine Learning & Data Science
+###############################
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.5.0
+xgboost>=1.7.0
+joblib>=1.3.0
+
+###############################
+# I/O & Caching (Phase 2 Enhanced)
+###############################
+pyarrow>=14.0.0        # Parquet read/write for fast caching
+
+
+###############################
+# CodeBERT / HuggingFace (Optional for training & inference)
+###############################
+torch>=2.0.0
+transformers>=4.40.0
+tokenizers>=0.19.0
+datasets>=2.19.0       # optional: dataset management
+accelerate>=0.30.0     # optional: distributed training
+huggingface_hub[hf_xet]>=0.23.0  # for Xet Storage performance
+hf_xet>=0.4.0  # for Xet Storage performance
+tensorboard>=2.20.0
+
+###############################
+# Static Analysis Tools
+###############################
+bandit>=1.7.5          # Python security linter
+
+###############################
+# Logging & Observability (Phase 2 Enhanced)
+###############################
+loguru>=0.7.0          # Structured logging with rotation
+memory_profiler>=0.61.0  # Memory usage profiling
+
+###############################
+# Testing
+###############################
+pytest>=7.0.0
+pytest-cov>=4.0.0
