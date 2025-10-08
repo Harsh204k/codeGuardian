@@ -154,3 +154,4 @@ secrets.json
 tools/js/*
 tools/spotbugs/*
 !tests/
+!src/static/*

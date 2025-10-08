@@ -1,9 +1,0 @@
-id: JAVA.CWE79.XSS.SINK
-name: Untrusted data written to HTTP response (XSS sink)
-cwe: CWE-79
-owasp: A03:2021-Injection
-severity: high
-languages: [java]
-patterns:
-  - 'getWriter\(\)\.(print|println|write)\s*\(\s*.*(getParameter|getHeader|getQueryString|getCookies|getRequestURI|getReader\s*\(\)\.readLine)\s*\('
-  - '\bout\.(print|println|write)\s*\(\s*.*(getParameter|getHeader|getQueryString|getCookies|getRequestURI|getReader\s*\(\)\.readLine)\s*\('
