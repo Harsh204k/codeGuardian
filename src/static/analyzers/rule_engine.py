@@ -1,11 +1,12 @@
 """
 Rule Engine for YAML-based Vulnerability Detection
-Loads and executes detection rules across multiple languages and CWE types
+Enhanced with confidence scoring, weighted aggregation, and hybrid rule matching
+Phase 3.2 - Production-grade implementation
 """
 import re
 import yaml
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, Tuple
 import logging
 
 
@@ -14,13 +15,34 @@ logger = logging.getLogger(__name__)
 
 class RuleEngine:
     """
-    Manages loading and execution of YAML-based vulnerability detection rules.
-    Supports multiple rule types: regex, api_call, ast_pattern, keyword, metric_threshold
+    Enhanced rule engine supporting 5 rule types with confidence scoring.
+    
+    Rule Types:
+    - regex: Pattern-based detection
+    - api_call: Dangerous API function detection  
+    - keyword: Simple keyword matching
+    - ast_pattern: AST-based structural detection
+    - metric_threshold: Metric-based quality gates
+    
+    Features:
+    - Weighted confidence aggregation
+    - Severity-based scoring (CRITICAL:1.0, HIGH:0.85, MEDIUM:0.65, LOW:0.40)
+    - CWE mapping and indexing
+    - Rule deduplication
     """
+    
+    # Severity weights for confidence calculation
+    SEVERITY_WEIGHTS = {
+        'CRITICAL': 1.0,
+        'HIGH': 0.85,
+        'MEDIUM': 0.65,
+        'LOW': 0.40,
+        'INFO': 0.20
+    }
     
     def __init__(self, rules_dir: Path):
         """
-        Initialize rule engine
+        Initialize enhanced rule engine
         
         Args:
             rules_dir: Path to rules directory containing YAML files
@@ -29,6 +51,7 @@ class RuleEngine:
         self.language_rules: Dict[str, List[Dict[str, Any]]] = {}
         self.shared_rules: List[Dict[str, Any]] = []
         self.cwe_mapping: Dict[str, List[Dict[str, Any]]] = {}
+        self._cache: Dict[str, List[Dict[str, Any]]] = {}
         
         if not self.rules_dir.exists():
             logger.warning(f"Rules directory not found: {self.rules_dir}")
@@ -38,8 +61,8 @@ class RuleEngine:
         logger.info("Loading all vulnerability detection rules...")
         
         # Load language-specific rules
-        language_files = ['cpp.yml', 'java.yml', 'python.yml', 'php.yml', 
-                         'js.yml', 'go.yml', 'ruby.yml']
+        language_files = ['c.yml', 'cpp.yml', 'java.yml', 'python.yml', 'php.yml', 
+                         'js.yml', 'go.yml', 'ruby.yml', 'csharp.yml']
         
         for lang_file in language_files:
             lang_path = self.rules_dir / lang_file
@@ -354,3 +377,140 @@ class RuleEngine:
             Set of CWE identifiers
         """
         return set(self.cwe_mapping.keys())
+    
+    def calculate_weighted_confidence(self, findings: List[Dict[str, Any]]) -> float:
+        """
+        Calculate overall confidence score using weighted aggregation.
+        Uses max(confidence * severity_weight) approach.
+        
+        Args:
+            findings: List of vulnerability findings
+            
+        Returns:
+            Float confidence score between 0.0 and 1.0
+        """
+        if not findings:
+            return 0.0
+        
+        weighted_scores = []
+        for finding in findings:
+            # Get confidence (handle both float and string)
+            confidence = finding.get('confidence', 0.5)
+            if isinstance(confidence, str):
+                # Convert string confidence to float
+                confidence_map = {'HIGH': 0.85, 'MEDIUM': 0.65, 'LOW': 0.40}
+                confidence = confidence_map.get(confidence, 0.5)
+            
+            # Get severity weight
+            severity = finding.get('severity', 'MEDIUM')
+            severity_weight = self.SEVERITY_WEIGHTS.get(severity, 0.5)
+            
+            # Calculate weighted score
+            weighted_score = float(confidence) * severity_weight
+            weighted_scores.append(weighted_score)
+        
+        # Return maximum weighted score
+        return max(weighted_scores) if weighted_scores else 0.0
+    
+    def normalize_finding(self, finding: Dict[str, Any], record_id: str, 
+                         language: str = "unknown") -> Dict[str, Any]:
+        """
+        Normalize finding to standard schema with consistent types.
+        
+        Args:
+            finding: Raw finding from rule execution
+            record_id: Record identifier
+            language: Programming language
+            
+        Returns:
+            Normalized finding dictionary
+        """
+        # Ensure confidence is float
+        confidence = finding.get('confidence', 0.5)
+        if isinstance(confidence, str):
+            confidence_map = {'HIGH': 0.85, 'MEDIUM': 0.65, 'LOW': 0.40}
+            confidence = confidence_map.get(confidence, 0.5)
+        
+        line_no = finding.get('line', finding.get('line_no', 0))
+        
+        return {
+            'id': f"{record_id}:L{line_no}:{finding.get('rule_id', 'unknown')}",
+            'rule_id': finding.get('rule_id', 'unknown'),
+            'cwe_id': finding.get('cwe_id', 'CWE-Unknown'),
+            'severity': finding.get('severity', 'MEDIUM'),
+            'confidence': float(confidence),
+            'line_no': line_no,
+            'evidence': str(finding.get('matched_text', finding.get('evidence', '')))[:200],
+            'message': finding.get('description', finding.get('message', 'Vulnerability detected')),
+            'remediation': finding.get('remediation', ''),
+            'language': language
+        }
+    
+    def deduplicate_findings(self, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Remove duplicate findings based on line number and rule ID.
+        
+        Args:
+            findings: List of findings
+            
+        Returns:
+            Deduplicated list of findings
+        """
+        seen = set()
+        unique = []
+        
+        for finding in findings:
+            # Create key from line and rule_id
+            line_no = finding.get('line_no', finding.get('line', 0))
+            rule_id = finding.get('rule_id', 'unknown')
+            key = (line_no, rule_id)
+            
+            if key not in seen:
+                seen.add(key)
+                unique.append(finding)
+        
+        return unique
+    
+    def get_severity_distribution(self, findings: List[Dict[str, Any]]) -> Dict[str, int]:
+        """
+        Calculate distribution of findings by severity.
+        
+        Args:
+            findings: List of findings
+            
+        Returns:
+            Dictionary mapping severity levels to counts
+        """
+        distribution = {
+            'CRITICAL': 0,
+            'HIGH': 0,
+            'MEDIUM': 0,
+            'LOW': 0,
+            'INFO': 0
+        }
+        
+        for finding in findings:
+            severity = finding.get('severity', 'MEDIUM')
+            if severity in distribution:
+                distribution[severity] += 1
+        
+        return distribution
+    
+    def get_cwe_distribution(self, findings: List[Dict[str, Any]]) -> Dict[str, int]:
+        """
+        Calculate distribution of findings by CWE.
+        
+        Args:
+            findings: List of findings
+            
+        Returns:
+            Dictionary mapping CWE IDs to counts
+        """
+        distribution = {}
+        
+        for finding in findings:
+            cwe_id = finding.get('cwe_id', 'CWE-Unknown')
+            distribution[cwe_id] = distribution.get(cwe_id, 0) + 1
+        
+        return distribution
+

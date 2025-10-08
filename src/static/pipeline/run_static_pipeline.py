@@ -1,25 +1,40 @@
 #!/usr/bin/env python3
 """
-CodeGuardian Static Analysis Pipeline
-Main entry point for running static analysis on datasets
+CodeGuardian Enhanced Static Analysis Pipeline (Phase 3.2)
+===========================================================
+
+Enhanced pipeline with:
+- C language support via CAnalyzer
+- Parallel processing via EnhancedMultiAnalyzer
+- Explainability reports (JSON + Markdown)
+- Confidence scoring with severity weighting
+- Production-grade error handling
+
+Usage:
+    python src/static/pipeline/run_static_pipeline_enhanced.py \
+        --input datasets/processed/train.jsonl \
+        --output datasets/static_results/train_static_enhanced.jsonl \
+        --reports outputs/reports \
+        --max-workers 7
+
+Author: CodeGuardian Team
+Version: 3.2.0 (Phase 3.2)
 """
 
 import argparse
 import json
 import sys
+import os
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from tqdm import tqdm
+from typing import Dict, Any, Optional
 import logging
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.static.utils.rule_loader import RuleLoader
-from src.static.utils.code_parser import CodeParser
-from src.static.utils.metrics_extractor import MetricsExtractor
-from src.static.utils.report_utils import ReportUtils
+from src.static.analyzers.multi_analyzer_enhanced import EnhancedMultiAnalyzer
+from src.static.analyzers.rule_engine import RuleEngine
+from src.static.utils.report_generator import ReportGenerator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,399 +43,192 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class StaticAnalysisPipeline:
+def run_enhanced_static_analysis(
+    input_path: str,
+    output_path: str,
+    reports_dir: Optional[str] = None,
+    max_workers: Optional[int] = None,
+    split_name: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Main pipeline for running static analysis across datasets.
+    Run enhanced static analysis with Phase 3.2 components.
+    
+    Args:
+        input_path: Path to input JSONL file
+        output_path: Path to output JSONL file
+        reports_dir: Directory for explainability reports (optional)
+        max_workers: Maximum number of parallel workers (default: CPU count - 1)
+        split_name: Name of the split (train/val/test) for report naming
+        
+    Returns:
+        Summary statistics dictionary
     """
+    logger.info("="*70)
+    logger.info("CodeGuardian Enhanced Static Analysis Pipeline (Phase 3.2)")
+    logger.info("="*70)
     
-    def __init__(self, input_path: Path, output_dir: Path, workers: int = 4):
-        """
-        Initialize the static analysis pipeline.
-        
-        Args:
-            input_path: Path to input JSONL file
-            output_dir: Directory for output files
-            workers: Number of parallel workers
-        """
-        self.input_path = Path(input_path)
-        self.output_dir = Path(output_dir)
-        self.workers = workers
-        self.rule_loader = RuleLoader()
-        
-        # Create output directory
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Language detection mapping
-        self.language_map = {
-            'python': 'python',
-            'java': 'java',
-            'cpp': 'cpp',
-            'c++': 'cpp',
-            'c': 'c',
-            'javascript': 'javascript',
-            'js': 'javascript',
-            'typescript': 'typescript',
-            'ts': 'typescript',
-            'php': 'php',
-            'go': 'go',
-            'golang': 'go',
-            'ruby': 'ruby',
-            'csharp': 'csharp',
-            'c#': 'csharp',
-        }
+    # Validate inputs
+    input_file = Path(input_path)
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_path}")
     
-    def load_dataset(self) -> List[Dict[str, Any]]:
-        """
-        Load the input JSONL dataset.
-        
-        Returns:
-            List of records
-        """
-        records = []
-        
-        logger.info(f"Loading dataset from {self.input_path}")
-        
-        with open(self.input_path, 'r', encoding='utf-8') as f:
-            for line_no, line in enumerate(f, 1):
-                try:
-                    record = json.loads(line)
-                    records.append(record)
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse line {line_no}: {e}")
-        
-        logger.info(f"Loaded {len(records)} records")
-        return records
+    # Create output directory
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     
-    def analyze_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Analyze a single code record.
+    # Infer split name from input path if not provided
+    if split_name is None:
+        split_name = input_file.stem  # e.g., 'train' from 'train.jsonl'
+    
+    logger.info(f"Input: {input_path}")
+    logger.info(f"Output: {output_path}")
+    logger.info(f"Split: {split_name}")
+    logger.info(f"Workers: {max_workers or 'auto (CPU count - 1)'}")
+    
+    # Step 1: Load rule engine
+    logger.info("\n[1/4] Loading rule engine...")
+    rule_engine = RuleEngine()
+    rule_engine.load_all_rules()
+    
+    supported_languages = rule_engine.get_supported_languages()
+    logger.info(f"Loaded rules for {len(supported_languages)} languages: {', '.join(supported_languages)}")
+    
+    # Step 2: Initialize enhanced multi-analyzer
+    logger.info("\n[2/4] Initializing enhanced multi-analyzer...")
+    analyzer = EnhancedMultiAnalyzer(
+        rule_engine=rule_engine,
+        max_workers=max_workers
+    )
+    
+    # Step 3: Run parallel analysis
+    logger.info("\n[3/4] Running parallel static analysis...")
+    logger.info("This may take several minutes depending on dataset size...")
+    
+    try:
+        analyzer.analyze_dataset_parallel(
+            input_path=str(input_file),
+            output_path=str(output_file)
+        )
+        logger.info(f"✓ Analysis complete! Results saved to: {output_path}")
+    except Exception as e:
+        logger.error(f"✗ Analysis failed: {e}")
+        raise
+    
+    # Step 4: Generate explainability reports
+    if reports_dir:
+        logger.info("\n[4/4] Generating explainability reports...")
+        reports_path = Path(reports_dir)
+        reports_path.mkdir(parents=True, exist_ok=True)
         
-        Args:
-            record: Input record with 'id', 'language', 'code' fields
-            
-        Returns:
-            Analysis result dictionary
-        """
-        record_id = record.get('id', 'unknown')
-        language = record.get('language', '').lower()
-        code = record.get('code', '')
-        
-        # Normalize language
-        language = self.language_map.get(language, language)
-        
-        if not code:
-            return self._empty_result(record_id, language)
+        json_report_path = reports_path / f"explain_{split_name}.json"
+        md_report_path = reports_path / f"explain_{split_name}.md"
         
         try:
-            # Load rules for this language
-            rules = self.rule_loader.load_rules_for_language(language)
+            # Load analysis results
+            logger.info(f"Loading results from {output_path}...")
+            findings_data = []
+            with open(output_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        findings_data.append(json.loads(line))
             
-            # Extract metrics
-            metrics_extractor = MetricsExtractor(language)
-            metrics = metrics_extractor.compute_all_metrics_with_score(code)
+            logger.info(f"Loaded {len(findings_data)} analyzed records")
             
-            # Parse code
-            code_parser = CodeParser(language)
-            parsed = code_parser.parse(code)
+            # Generate reports
+            report_gen = ReportGenerator()
             
-            # Detect vulnerabilities
-            findings = self._detect_vulnerabilities(code, rules, language, record_id)
+            logger.info(f"Generating JSON report: {json_report_path}")
+            json_report = report_gen.generate_json_report(
+                findings_data=findings_data,
+                output_path=str(json_report_path),
+                split_name=split_name
+            )
             
-            # Calculate risk score
-            risk_score = ReportUtils.calculate_risk_score(findings)
+            logger.info(f"Generating Markdown report: {md_report_path}")
+            report_gen.generate_markdown_report(
+                json_report=json_report,
+                output_path=str(md_report_path)
+            )
             
-            # Generate static flags
-            static_flags = ReportUtils.generate_static_flags(findings)
+            logger.info(f"✓ Reports generated successfully!")
+            logger.info(f"  - JSON: {json_report_path}")
+            logger.info(f"  - Markdown: {md_report_path}")
             
-            # Extract CWE IDs
-            detected_cwes = list(set(f['cwe_id'] for f in findings))
-            
-            result = {
-                'id': record_id,
-                'language': language,
-                'findings': findings,
-                'static_metrics': metrics,
-                'static_flags': static_flags,
-                'risk_score': risk_score,
-                'detected_cwes': detected_cwes,
-                'vulnerability_count': len(findings),
-                'severity_distribution': ReportUtils.calculate_severity_distribution(findings)
-            }
-            
-            return result
+            # Return summary from JSON report
+            summary = json_report.get('summary', {})
             
         except Exception as e:
-            logger.error(f"Error analyzing record {record_id}: {e}")
-            return self._empty_result(record_id, language, error=str(e))
-    
-    def _detect_vulnerabilities(self, code: str, rules: List[Dict[str, Any]], 
-                               language: str, record_id: str) -> List[Dict[str, Any]]:
-        """
-        Detect vulnerabilities using loaded rules.
+            logger.error(f"✗ Report generation failed: {e}")
+            # Don't raise - analysis still succeeded
+            summary = {'error': str(e)}
+    else:
+        logger.info("\n[4/4] Skipping explainability reports (no --reports specified)")
         
-        Args:
-            code: Source code
-            rules: List of rule dictionaries
-            language: Programming language
-            record_id: Record identifier
-            
-        Returns:
-            List of findings
-        """
-        findings = []
-        
-        for rule in rules:
-            rule_type = rule.get('type', 'regex')
-            
-            try:
-                if rule_type == 'regex':
-                    findings.extend(self._apply_regex_rule(rule, code, record_id, language))
-                elif rule_type == 'api_call':
-                    findings.extend(self._apply_api_call_rule(rule, code, record_id, language))
-                elif rule_type == 'keyword':
-                    findings.extend(self._apply_keyword_rule(rule, code, record_id, language))
-            except Exception as e:
-                logger.debug(f"Error applying rule {rule.get('id')}: {e}")
-        
-        return findings
-    
-    def _apply_regex_rule(self, rule: Dict[str, Any], code: str, 
-                         record_id: str, language: str) -> List[Dict[str, Any]]:
-        """Apply regex-based rule."""
-        import re
-        findings = []
-        pattern = rule.get('pattern', '')
-        
-        if not pattern:
-            return findings
-        
+        # Calculate basic summary
         try:
-            regex = re.compile(pattern, re.MULTILINE | re.IGNORECASE)
-            lines = code.split('\n')
+            with open(output_path, 'r', encoding='utf-8') as f:
+                findings_data = [json.loads(line) for line in f if line.strip()]
             
-            for line_no, line in enumerate(lines, 1):
-                if regex.search(line):
-                    findings.append({
-                        'id': f"{record_id}:{line_no}:{rule['id']}",
-                        'rule_id': rule['id'],
-                        'cwe_id': rule.get('cwe_id', 'CWE-Unknown'),
-                        'severity': rule.get('severity', 'MEDIUM'),
-                        'confidence': rule.get('confidence', 'MEDIUM'),
-                        'message': rule.get('name', 'Security Issue'),
-                        'line_no': line_no,
-                        'evidence': line.strip()[:200],
-                        'file_path': record_id,
-                        'language': language,
-                        'remediation': rule.get('remediation', ''),
-                        'owasp': rule.get('owasp', ''),
-                        'tags': rule.get('tags', [])
-                    })
-        except re.error:
-            pass
-        
-        return findings
-    
-    def _apply_api_call_rule(self, rule: Dict[str, Any], code: str,
-                            record_id: str, language: str) -> List[Dict[str, Any]]:
-        """Apply API call detection rule."""
-        import re
-        findings = []
-        api_names = rule.get('api_names', [])
-        
-        lines = code.split('\n')
-        for line_no, line in enumerate(lines, 1):
-            for api_name in api_names:
-                pattern = rf'\b{re.escape(api_name)}\s*\('
-                if re.search(pattern, line):
-                    findings.append({
-                        'id': f"{record_id}:{line_no}:{rule['id']}",
-                        'rule_id': rule['id'],
-                        'cwe_id': rule.get('cwe_id', 'CWE-Unknown'),
-                        'severity': rule.get('severity', 'MEDIUM'),
-                        'confidence': rule.get('confidence', 'MEDIUM'),
-                        'message': f"{rule.get('name', 'API Call')}: {api_name}",
-                        'line_no': line_no,
-                        'evidence': line.strip()[:200],
-                        'file_path': record_id,
-                        'language': language,
-                        'remediation': rule.get('remediation', ''),
-                        'owasp': rule.get('owasp', ''),
-                        'tags': rule.get('tags', [])
-                    })
-        
-        return findings
-    
-    def _apply_keyword_rule(self, rule: Dict[str, Any], code: str,
-                           record_id: str, language: str) -> List[Dict[str, Any]]:
-        """Apply keyword detection rule."""
-        import re
-        findings = []
-        keywords = rule.get('keywords', [])
-        
-        lines = code.split('\n')
-        for line_no, line in enumerate(lines, 1):
-            for keyword in keywords:
-                pattern = rf'\b{re.escape(keyword)}\b'
-                if re.search(pattern, line, re.IGNORECASE):
-                    findings.append({
-                        'id': f"{record_id}:{line_no}:{rule['id']}",
-                        'rule_id': rule['id'],
-                        'cwe_id': rule.get('cwe_id', 'CWE-Unknown'),
-                        'severity': rule.get('severity', 'LOW'),
-                        'confidence': rule.get('confidence', 'LOW'),
-                        'message': f"{rule.get('name', 'Keyword')}: {keyword}",
-                        'line_no': line_no,
-                        'evidence': line.strip()[:200],
-                        'file_path': record_id,
-                        'language': language,
-                        'remediation': rule.get('remediation', ''),
-                        'owasp': rule.get('owasp', ''),
-                        'tags': rule.get('tags', [])
-                    })
-        
-        return findings
-    
-    def _empty_result(self, record_id: str, language: str, error: str = None) -> Dict[str, Any]:
-        """Create an empty result for records that can't be analyzed."""
-        return {
-            'id': record_id,
-            'language': language,
-            'findings': [],
-            'static_metrics': {},
-            'static_flags': {},
-            'risk_score': 0.0,
-            'detected_cwes': [],
-            'vulnerability_count': 0,
-            'severity_distribution': {},
-            'error': error
-        }
-    
-    def run(self, sample_size: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Run the static analysis pipeline.
-        
-        Args:
-            sample_size: Optional number of records to sample
+            total_records = len(findings_data)
+            total_findings = sum(r.get('vulnerability_count', 0) for r in findings_data)
+            records_with_vulns = sum(1 for r in findings_data if r.get('vulnerability_count', 0) > 0)
             
-        Returns:
-            Dictionary with pipeline results
-        """
-        # Load dataset
-        records = self.load_dataset()
-        
-        # Sample if requested
-        if sample_size:
-            import random
-            records = random.sample(records, min(sample_size, len(records)))
-            logger.info(f"Sampled {len(records)} records")
-        
-        # Analyze records in parallel
-        results = []
-        logger.info(f"Analyzing {len(records)} records with {self.workers} workers")
-        
-        with ProcessPoolExecutor(max_workers=self.workers) as executor:
-            futures = {executor.submit(self.analyze_record, record): record 
-                      for record in records}
-            
-            for future in tqdm(as_completed(futures), total=len(futures), 
-                             desc="Analyzing"):
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    logger.error(f"Worker error: {e}")
-        
-        # Generate outputs
-        self._save_results(results)
-        
-        # Generate summary
-        summary = self._generate_summary(results)
-        
-        return summary
+            summary = {
+                'total_records': total_records,
+                'total_findings': total_findings,
+                'records_with_vulnerabilities': records_with_vulns
+            }
+        except Exception as e:
+            logger.warning(f"Could not calculate summary: {e}")
+            summary = {}
     
-    def _save_results(self, results: List[Dict[str, Any]]):
-        """Save analysis results to files."""
-        # Save JSONL
-        jsonl_path = self.output_dir / f"{self.input_path.stem}_static_results.jsonl"
-        ReportUtils.create_jsonl_output(results, jsonl_path)
-        
-        # Save static flags CSV
-        csv_path = self.output_dir / f"{self.input_path.stem}_static_flags.csv"
-        self._save_flags_csv(results, csv_path)
-        
-        # Save summary report
-        summary_path = self.output_dir / f"{self.input_path.stem}_summary.json"
-        all_findings = {r['id']: r for r in results}
-        ReportUtils.generate_summary_report(all_findings, summary_path)
-        
-        logger.info(f"Results saved to {self.output_dir}")
+    logger.info("\n" + "="*70)
+    logger.info("ENHANCED STATIC ANALYSIS COMPLETE")
+    logger.info("="*70)
     
-    def _save_flags_csv(self, results: List[Dict[str, Any]], output_path: Path):
-        """Save static flags as CSV for ML model input."""
-        import csv
+    if summary:
+        logger.info(f"Total Records: {summary.get('total_records', 'N/A')}")
+        logger.info(f"Total Findings: {summary.get('total_findings', 'N/A')}")
+        logger.info(f"Records with Vulnerabilities: {summary.get('records_with_vulnerabilities', 'N/A')}")
         
-        if not results:
-            return
-        
-        # Collect all flag names
-        all_flags = set()
-        for result in results:
-            all_flags.update(result.get('static_flags', {}).keys())
-        
-        flag_names = sorted(all_flags)
-        
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=['id', 'risk_score'] + flag_names)
-            writer.writeheader()
-            
-            for result in results:
-                row = {
-                    'id': result['id'],
-                    'risk_score': result.get('risk_score', 0.0)
-                }
-                flags = result.get('static_flags', {})
-                for flag_name in flag_names:
-                    row[flag_name] = flags.get(flag_name, 0)
-                
-                writer.writerow(row)
-        
-        logger.info(f"Flags CSV saved to {output_path}")
+        if 'unique_cwes' in summary:
+            logger.info(f"Unique CWEs Detected: {summary['unique_cwes']}")
+        if 'average_confidence' in summary:
+            logger.info(f"Average Confidence: {summary['average_confidence']:.3f}")
+        if 'average_risk_score' in summary:
+            logger.info(f"Average Risk Score: {summary['average_risk_score']:.3f}")
     
-    def _generate_summary(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Generate pipeline execution summary."""
-        total_findings = sum(r['vulnerability_count'] for r in results)
-        avg_risk = sum(r['risk_score'] for r in results) / max(len(results), 1)
-        
-        severity_counts = {
-            'CRITICAL': 0,
-            'HIGH': 0,
-            'MEDIUM': 0,
-            'LOW': 0,
-            'INFO': 0
-        }
-        
-        for result in results:
-            dist = result.get('severity_distribution', {})
-            for severity, count in dist.items():
-                if severity in severity_counts:
-                    severity_counts[severity] += count
-        
-        summary = {
-            'total_records': len(results),
-            'total_findings': total_findings,
-            'average_risk_score': round(avg_risk, 3),
-            'severity_distribution': severity_counts,
-            'records_with_vulnerabilities': sum(1 for r in results if r['vulnerability_count'] > 0)
-        }
-        
-        logger.info(f"Analysis complete: {summary}")
-        return summary
+    logger.info("="*70)
+    
+    return summary
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='CodeGuardian Static Analysis Pipeline',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description='CodeGuardian Enhanced Static Analysis Pipeline (Phase 3.2)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Analyze with explainability reports
+  python src/static/pipeline/run_static_pipeline_enhanced.py \\
+      --input datasets/processed/train.jsonl \\
+      --output datasets/static_results/train_static_enhanced.jsonl \\
+      --reports outputs/reports \\
+      --split train
+
+  # Analyze without reports
+  python src/static/pipeline/run_static_pipeline_enhanced.py \\
+      --input datasets/processed/val.jsonl \\
+      --output datasets/static_results/val_static_enhanced.jsonl
+
+  # Analyze with custom worker count
+  python src/static/pipeline/run_static_pipeline_enhanced.py \\
+      --input datasets/processed/test.jsonl \\
+      --output datasets/static_results/test_static_enhanced.jsonl \\
+      --reports outputs/reports \\
+      --max-workers 4 \\
+      --split test
+        """
     )
     
     parser.add_argument(
@@ -431,64 +239,49 @@ def main():
     )
     
     parser.add_argument(
-        '--output-dir',
+        '--output',
         type=str,
-        default='datasets/static_results',
-        help='Output directory for results (default: datasets/static_results)'
+        required=True,
+        help='Path to output JSONL file (e.g., datasets/static_results/train_static_enhanced.jsonl)'
     )
     
     parser.add_argument(
-        '--workers',
-        type=int,
-        default=4,
-        help='Number of parallel workers (default: 4)'
-    )
-    
-    parser.add_argument(
-        '--sample',
-        type=int,
-        help='Sample size for testing (optional)'
-    )
-    
-    parser.add_argument(
-        '--language',
+        '--reports',
         type=str,
-        help='Filter to specific language (optional)'
+        help='Directory for explainability reports (e.g., outputs/reports)'
     )
     
     parser.add_argument(
-        '--quick-test',
-        action='store_true',
-        help='Run quick test with 100 samples'
+        '--max-workers',
+        type=int,
+        help='Maximum number of parallel workers (default: CPU count - 1)'
+    )
+    
+    parser.add_argument(
+        '--split',
+        type=str,
+        help='Split name for report generation (train/val/test, auto-detected if not provided)'
     )
     
     args = parser.parse_args()
     
-    # Quick test mode
-    if args.quick_test:
-        args.sample = 100
-        logger.info("Running in quick test mode (100 samples)")
-    
-    # Run pipeline
-    pipeline = StaticAnalysisPipeline(
-        input_path=args.input,
-        output_dir=args.output_dir,
-        workers=args.workers
-    )
-    
-    summary = pipeline.run(sample_size=args.sample)
-    
-    print("\n" + "="*60)
-    print("STATIC ANALYSIS COMPLETE")
-    print("="*60)
-    print(f"Total Records: {summary['total_records']}")
-    print(f"Total Findings: {summary['total_findings']}")
-    print(f"Average Risk Score: {summary['average_risk_score']}")
-    print(f"Records with Vulnerabilities: {summary['records_with_vulnerabilities']}")
-    print("\nSeverity Distribution:")
-    for severity, count in summary['severity_distribution'].items():
-        print(f"  {severity}: {count}")
-    print("="*60)
+    try:
+        summary = run_enhanced_static_analysis(
+            input_path=args.input,
+            output_path=args.output,
+            reports_dir=args.reports,
+            max_workers=args.max_workers,
+            split_name=args.split
+        )
+        
+        # Exit successfully
+        sys.exit(0)
+        
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == '__main__':

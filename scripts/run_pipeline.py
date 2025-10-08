@@ -26,6 +26,7 @@ import argparse
 import sys
 import time
 import json
+import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -361,8 +362,18 @@ class EnhancedPipelineOrchestrator:
                 from pathlib import Path
                 import subprocess
                 
-                # Run static analysis pipeline on all splits
-                script_path = Path('src/static/pipeline/run_static_pipeline.py')
+                # Check if enhanced mode is enabled
+                use_enhanced = self.config.get('pipeline', {}).get('enhanced_static', False)
+                
+                if use_enhanced:
+                    # Use Phase 3.2 enhanced pipeline
+                    script_path = Path('src/static/pipeline/run_static_pipeline_enhanced.py')
+                    self.logger.info("Using ENHANCED static analysis pipeline (Phase 3.2)")
+                    self.logger.info("Features: C support, parallel processing, explainability reports")
+                else:
+                    # Use original Phase 3 pipeline
+                    script_path = Path('src/static/pipeline/run_static_pipeline.py')
+                    self.logger.info("Using standard static analysis pipeline (Phase 3)")
                 
                 if not script_path.exists():
                     self.logger.error(f"Static analysis script not found: {script_path}")
@@ -379,11 +390,29 @@ class EnhancedPipelineOrchestrator:
                         continue
                     
                     self.logger.info(f"Analyzing {split} split...")
+                    
+                    if use_enhanced:
+                        # Enhanced pipeline with explainability reports
+                        output_file = f'datasets/static_results/{split}_static_enhanced.jsonl'
+                        cmd = [
+                            sys.executable, str(script_path),
+                            '--input', str(input_file),
+                            '--output', output_file,
+                            '--reports', 'outputs/reports',
+                            '--split', split,
+                            '--max-workers', str(os.cpu_count() - 1 if os.cpu_count() else 4)
+                        ]
+                    else:
+                        # Original pipeline
+                        cmd = [
+                            sys.executable, str(script_path),
+                            '--input', str(input_file),
+                            '--output-dir', 'datasets/static_results',
+                            '--workers', '8'
+                        ]
+                    
                     result = subprocess.run(
-                        [sys.executable, str(script_path), 
-                         '--input', str(input_file),
-                         '--output-dir', 'datasets/static_results',
-                         '--workers', '8'],
+                        cmd,
                         capture_output=True,
                         text=True,
                         timeout=3600  # 1 hour timeout per split
@@ -393,11 +422,17 @@ class EnhancedPipelineOrchestrator:
                         self.logger.error(f"Static analysis failed for {split} split")
                         self.logger.error(result.stderr)
                         return False
+                    
+                    # Log stdout for progress info
+                    if result.stdout:
+                        self.logger.info(result.stdout)
                 
                 result = subprocess.run(['echo', 'done'], capture_output=True, text=True)  # Dummy for next block
                 
                 if result.returncode == 0:
+                    
                     self.logger.info("Static analysis completed successfully")
+                    self.logger.info("Explainability reports available in: outputs/reports/")
                     self.logger.info(result.stdout)
                     return True
                 else:
@@ -584,6 +619,12 @@ def main():
     )
     
     parser.add_argument(
+        "--static-enhanced",
+        action="store_true",
+        help="Enable enhanced static analysis with C support and explainability (Phase 3.2)"
+    )
+    
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -610,6 +651,15 @@ def main():
         if 'enable' not in config['pipeline']:
             config['pipeline']['enable'] = {}
         config['pipeline']['enable']['static_analysis'] = True
+    
+    # Enable enhanced static analysis if requested
+    if args.static_enhanced:
+        if 'pipeline' not in config:
+            config['pipeline'] = {}
+        if 'enable' not in config['pipeline']:
+            config['pipeline']['enable'] = {}
+        config['pipeline']['enable']['static_analysis'] = True
+        config['pipeline']['enhanced_static'] = True  # Flag for enhanced mode
     
     # Create orchestrator
     orchestrator = EnhancedPipelineOrchestrator(

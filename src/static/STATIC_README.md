@@ -36,21 +36,21 @@ The **codeGuardian Static Analyzer** is a production-ready, multi-language vulne
 - **Overall Confidence**: Weighted maximum across all findings
 - **Severity-Weighted**: Critical findings weighted higher than low-severity
 - **Rule-Level Confidence**: Defined in YAML rules
-- **Output Integration**: `static_confidence` field in CSV for ML models
+- **Output Integration**: `static_confidence` field in analysis results
 
 ### 3. Parallel Processing
 - **ProcessPoolExecutor**: Multi-core analysis for large datasets
 - **Batch Processing**: Intelligent batching by language
 - **Progress Tracking**: Real-time progress bars with `tqdm`
-- **Incremental Saves**: Per-language checkpointing to `outputs/incremental/`
-- **Configurable Workers**: `--workers` flag (default: CPU count)
+- **Incremental Saves**: Per-language checkpointing to `datasets/static_results/incremental/`
+- **Configurable Workers**: `--max-workers` flag (default: CPU count - 1)
 
 ### 4. Explainability Reports
 - **Comprehensive Analytics**: CWE frequency, rule effectiveness, confidence histograms
 - **Language Breakdown**: Per-language vulnerability statistics
 - **Top Vulnerable Functions**: Ranked by vulnerability score
 - **Precision Proxies**: TP/FP/FN metrics when ground truth available
-- **Output Location**: `src/static/outputs/reports/explain_{split}.json`
+- **Output Location**: `outputs/reports/explain_{split}.{json,md}`
 
 ### 5. Enhanced Rule Engine
 - **5 Rule Types**: `regex`, `api_call`, `keyword`, `ast_pattern`, `metric_threshold`
@@ -80,95 +80,76 @@ pip install tree-sitter  # For advanced language parsing
 ### Quick Start
 
 ```bash
-# Analyze all splits (train/val/test) with 8 workers
-python src/static/run_static_analysis.py --split all --workers 8
+# Analyze all splits (train/val/test) with enhanced pipeline
+python src/static/pipeline/run_static_pipeline.py --input datasets/processed/train.jsonl --output datasets/static_results/train_static_enhanced.jsonl --reports outputs/reports --max-workers 7
 
 # Analyze only training set
-python src/static/run_static_analysis.py --split train
+python src/static/pipeline/run_static_pipeline.py --input datasets/processed/train.jsonl --output datasets/static_results/train_static_enhanced.jsonl
 
 # Custom input/output paths
-python src/static/run_static_analysis.py \
-    --input-dir datasets/processed \
-    --output-dir src/static/outputs \
-    --split all \
-    --workers 4
+python src/static/pipeline/run_static_pipeline.py \
+    --input datasets/processed/train.jsonl \
+    --output datasets/static_results/train_static_enhanced.jsonl \
+    --reports outputs/reports \
+    --max-workers 4
 ```
 
 ### Pipeline Integration
 
 ```bash
-# Run complete pipeline with static analysis
-python codeGuardian/scripts/run_pipeline.py --static-analysis
+# Run complete pipeline with enhanced static analysis
+python scripts/run_pipeline.py --static-enhanced
 
 # Run only static analysis stage
-python codeGuardian/scripts/run_pipeline.py --stages static_analysis
+python scripts/run_pipeline.py --resume static_analysis --static-enhanced
 ```
 
 ### CLI Arguments
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--split` | Dataset split to analyze (`train`, `val`, `test`, `all`) | `all` |
-| `--input-dir` | Input directory with JSONL files | `datasets/processed` |
-| `--output-dir` | Output directory for results | `src/static/outputs` |
-| `--workers` | Number of parallel workers | CPU count |
-| `--rules-dir` | Directory containing YAML rules | `src/static/rules` |
-| `--no-incremental` | Disable incremental per-language saves | Enabled by default |
+| `--input` | Path to input JSONL file | Required |
+| `--output` | Path to output JSONL file | Required |
+| `--reports` | Directory for explainability reports | Optional |
+| `--max-workers` | Maximum number of parallel workers | CPU count - 1 |
+| `--split` | Split name for report generation | Auto-detected |
 
 ---
 
 ## Output Files
 
-### 1. Static Flags CSV (ML Model Input)
-**Location**: `src/static/outputs/static_flags_{split}.csv`
-
-**Columns**:
-- `id`, `language`, `label`
-- `has_vulnerabilities`, `vulnerability_count`
-- `critical_count`, `high_count`, `medium_count`, `low_count`
-- `severity_score`, `max_severity`
-- **`static_confidence`** ← NEW in Phase 3.2
-- `M1_cyclomatic_complexity` through `M15_code_complexity_score`
-
-**Example Row**:
-```csv
-id,language,label,has_vulnerabilities,vulnerability_count,static_confidence,M1_cyclomatic_complexity,...
-zenodo_c_001,C,1,True,5,0.87,12,3,8,45,...
-```
-
-### 2. Full Analysis Results (JSONL)
-**Location**: `src/static/outputs/static_analysis_{split}.jsonl`
+### 1. Enhanced Static Analysis Results (JSONL)
+**Location**: `datasets/static_results/{split}_static_enhanced.jsonl`
 
 **Structure**:
 ```json
 {
   "id": "zenodo_c_001",
-  "language": "C",
-  "code": "...",
-  "label": 1,
-  "static_analysis": {
-    "static_metrics": {"M1_cyclomatic_complexity": 12, ...},
-    "detected_cwes": ["CWE-120", "CWE-134"],
-    "vulnerabilities": [
-      {
-        "cwe_id": "CWE-120",
-        "rule_id": "CWE-120-strcpy",
-        "severity": "high",
-        "confidence": 0.90,
-        "line": 42,
-        "description": "...",
-        "remediation": "..."
-      }
-    ],
-    "vulnerability_count": 5,
-    "overall_confidence": 0.87,
-    "severity_scores": {"total_score": 24, "counts": {...}}
-  }
+  "language": "c",
+  "vulnerability_count": 3,
+  "detected_cwes": ["CWE-120", "CWE-134"],
+  "static_confidence": 0.87,
+  "static_metrics": {
+    "M1_cyclomatic_complexity": 12,
+    "M2_nesting_depth": 3,
+    "M15_code_complexity_score": 0.65
+  },
+  "findings": [
+    {
+      "rule_id": "CWE-120-strcpy",
+      "severity": "high",
+      "confidence": 0.90,
+      "line_number": 42,
+      "cwe": "CWE-120",
+      "message": "Unsafe strcpy usage detected",
+      "remediation": "Use strncpy() or snprintf()"
+    }
+  ]
 }
 ```
 
-### 3. Explainability Report (JSON)
-**Location**: `src/static/outputs/reports/explain_{split}.json`
+### 2. Explainability Report (JSON)
+**Location**: `outputs/reports/explain_{split}.json`
 
 **Sections**:
 - **summary**: Total records, vulnerability rate, avg confidence
@@ -197,25 +178,20 @@ zenodo_c_001,C,1,True,5,0.87,12,3,8,45,...
     "unique_cwes": 42,
     "total_cwe_instances": 24500,
     "top_cwes": [
-      {"cwe_id": "CWE-79", "count": 3200, "avg_confidence": 0.85, ...},
-      {"cwe_id": "CWE-89", "count": 2800, "avg_confidence": 0.91, ...}
+      {"cwe_id": "CWE-79", "count": 3200, "avg_confidence": 0.85},
+      {"cwe_id": "CWE-89", "count": 2800, "avg_confidence": 0.91}
     ]
-  },
-  ...
+  }
 }
 ```
 
-### 4. Vulnerability Report (JSON)
-**Location**: `src/static/outputs/logs/analyzer_report_{split}.json`
+### 3. Explainability Report (Markdown)
+**Location**: `outputs/reports/explain_{split}.md`
 
-Aggregate vulnerability statistics including:
-- Total vulnerable records
-- Vulnerabilities by CWE
-- Vulnerabilities by severity
-- Top 20 most vulnerable records
+Human-readable summary with tables, statistics, and examples.
 
-### 5. Incremental Saves (Per-Language)
-**Location**: `src/static/outputs/incremental/static_analysis_{split}_{language}.jsonl`
+### 4. Incremental Saves (Per-Language)
+**Location**: `datasets/static_results/incremental/static_analysis_{split}_{language}.jsonl`
 
 Language-specific checkpoints created during processing for fault tolerance.
 
@@ -235,13 +211,17 @@ src/static/
 │   ├── php_analyzer.py            # PHP analyzer
 │   ├── go_analyzer.py             # Go analyzer
 │   ├── ruby_analyzer.py           # Ruby analyzer
-│   ├── language_map.py            # Language routing (updated for C)
-│   ├── rule_engine.py             # ENHANCED: Confidence scoring
 │   ├── multi_analyzer.py          # ENHANCED: Parallel processing
-│   └── explainability.py          # NEW: Explainability generator
+│   ├── rule_engine.py             # ENHANCED: Confidence scoring
+│   ├── run_all_analyzers.py       # Multi-language runner
+│   └── __init__.py
 ├── features/
-│   ├── static_feature_extractor.py  # M1-M15 metrics
-│   └── feature_definitions.yml
+│   └── static_feature_extractor.py  # M1-M15 metrics
+├── pipeline/
+│   ├── run_static_pipeline.py      # ENHANCED: Main pipeline
+│   ├── merge_static_with_features.py # Merge utilities
+│   ├── export_static_results.py    # Export utilities
+│   └── __init__.py
 ├── rules/
 │   ├── c.yml                      # NEW: 40 C-specific rules
 │   ├── cpp.yml
@@ -251,18 +231,19 @@ src/static/
 │   ├── php.yml
 │   ├── go.yml
 │   ├── ruby.yml
+│   ├── csharp.yml
+│   ├── rule_schema.json           # Rule validation schema
 │   └── shared/                    # Cross-language CWE rules
-│       ├── cwe89_sql_injection.yml
-│       ├── cwe78_cmd_exec.yml
-│       └── ... (10 shared rule files)
-├── outputs/                       # Analysis results
-│   ├── static_flags_{split}.csv
-│   ├── static_analysis_{split}.jsonl
-│   ├── incremental/               # Per-language checkpoints
-│   ├── reports/                   # Explainability reports
-│   └── logs/                      # Analyzer reports
-├── run_static_analysis.py         # CLI entrypoint
-└── README.md                      # This file
+├── utils/
+│   ├── code_parser.py             # Code parsing utilities
+│   ├── metrics_extractor.py       # M1-M15 metrics
+│   ├── report_generator.py        # NEW: Explainability reports
+│   ├── report_utils.py            # Report utilities
+│   ├── rule_loader.py             # YAML rule loading
+│   └── __init__.py
+├── PHASE_3.2_COMMANDS.md          # Command reference
+├── PHASE_3.2_SUMMARY.md           # Implementation summary
+└── STATIC_README.md               # This file
 ```
 
 ---
@@ -314,6 +295,7 @@ overall_confidence = max([
 ```
 
 **Interpretation**:
+
 - `0.9-1.0`: Very high confidence (critical finding with strong evidence)
 - `0.7-0.9`: High confidence (likely vulnerability)
 - `0.5-0.7`: Medium confidence (potential issue, needs review)
@@ -333,7 +315,7 @@ overall_confidence = max([
    - Each worker analyzes its sub-batch independently
 4. **Aggregate Results**: Combine results with progress tracking
 5. **Incremental Saves**: Write per-language JSONL checkpoints
-6. **Final Output**: Generate consolidated CSV, reports, and explainability
+6. **Final Output**: Generate consolidated JSONL, reports, and explainability
 
 ### Scalability Benchmarks
 
@@ -352,14 +334,13 @@ overall_confidence = max([
 ```python
 import json
 
-with open('src/static/outputs/reports/explain_train.json') as f:
+with open('outputs/reports/explain_train.json') as f:
     report = json.load(f)
 
 # Top 5 CWEs
 for cwe in report['cwe_analysis']['top_cwes'][:5]:
     print(f"{cwe['cwe_id']}: {cwe['count']} instances, "
-          f"avg confidence: {cwe['avg_confidence']}, "
-          f"languages: {cwe['languages']}")
+          f"avg confidence: {cwe['avg_confidence']}")
 ```
 
 ### Confidence Distribution
@@ -410,21 +391,26 @@ print(f"F1 Score: {precision_data['f1_score']}")
 ## Troubleshooting
 
 ### pycparser Not Found
+
 **Issue**: C analyzer falls back to regex-only mode.
 **Solution**: Install pycparser: `pip install pycparser`
 
 ### Out of Memory
+
 **Issue**: Large datasets exceed available RAM.
-**Solution**: Reduce `--workers` or process splits individually (`--split train`, `--split val`, etc.)
+**Solution**: Reduce `--max-workers` or process splits individually
 
 ### Slow Processing
+
 **Issue**: Analysis taking too long.
 **Solution**:
-1. Increase `--workers` to match CPU cores
-2. Use incremental saves (`--incremental` is default)
+
+1. Increase `--max-workers` to match CPU cores
+2. Use incremental saves (enabled by default)
 3. Process splits separately
 
 ### Missing Explainability Reports
+
 **Issue**: No files in `outputs/reports/`.
 **Solution**: Ensure analysis completes successfully. Check logs for errors.
 
@@ -434,21 +420,33 @@ print(f"F1 Score: {precision_data['f1_score']}")
 
 ### XGBoost Fusion Model Input
 
-The `static_flags_{split}.csv` output is designed for direct integration:
+The enhanced JSONL output is designed for direct integration:
 
 ```python
+import json
 import pandas as pd
 from xgboost import XGBClassifier
 
 # Load static analysis features
-static_features = pd.read_csv('src/static/outputs/static_flags_train.csv')
+static_data = []
+with open('datasets/static_results/train_static_enhanced.jsonl', 'r') as f:
+    for line in f:
+        static_data.append(json.loads(line))
 
 # Extract feature columns
-feature_cols = [c for c in static_features.columns if c.startswith('M') or 
-                c in ['vulnerability_count', 'severity_score', 'static_confidence']]
+features = []
+for record in static_data:
+    feature_row = {
+        'id': record['id'],
+        'vulnerability_count': record['vulnerability_count'],
+        'static_confidence': record['static_confidence'],
+        **record['static_metrics']  # M1-M15 metrics
+    }
+    features.append(feature_row)
 
-X = static_features[feature_cols]
-y = static_features['label']
+df = pd.DataFrame(features)
+X = df.drop(['id'], axis=1)
+y = df['label']  # If available
 
 # Train XGBoost model
 model = XGBClassifier()
@@ -475,47 +473,45 @@ plt.show()
 
 ## API Reference
 
-### MultiAnalyzer Class
+### EnhancedMultiAnalyzer Class
 
 ```python
 from pathlib import Path
-from src.static.analyzers.multi_analyzer import MultiAnalyzer
+from src.static.analyzers.multi_analyzer import EnhancedMultiAnalyzer
 
 # Initialize
-analyzer = MultiAnalyzer(
-    rules_dir=Path('src/static/rules'),
+analyzer = EnhancedMultiAnalyzer(
+    rule_engine=rule_engine,
     max_workers=8
 )
 
 # Analyze dataset
-stats = analyzer.analyze_dataset(
-    dataset_path=Path('datasets/processed/train.jsonl'),
-    output_dir=Path('src/static/outputs'),
-    batch_size=100,
-    incremental_save=True
+stats = analyzer.analyze_dataset_parallel(
+    input_path=Path('datasets/processed/train.jsonl'),
+    output_path=Path('datasets/static_results/train_static_enhanced.jsonl')
 )
 
 print(f"Analyzed {stats['analyzed']} records")
 print(f"Found {stats['total_vulnerabilities']} vulnerabilities")
-print(f"Unique CWEs: {stats['unique_cwes']}")
 ```
 
-### ExplainabilityGenerator Class
+### ReportGenerator Class
 
 ```python
-from src.static.analyzers.explainability import ExplainabilityGenerator
+from src.static.utils.report_generator import ReportGenerator
 
 # Generate report
-generator = ExplainabilityGenerator()
-report = generator.generate_report(
-    results=analysis_results,
+report_gen = ReportGenerator()
+json_report = report_gen.generate_json_report(
+    findings_data=findings_data,
+    output_path=Path('outputs/reports/explain_train.json'),
     split_name='train'
 )
 
-# Save report
-generator.save_report(
-    report=report,
-    output_path=Path('src/static/outputs/reports/explain_train.json')
+# Generate markdown
+report_gen.generate_markdown_report(
+    json_report=json_report,
+    output_path=Path('outputs/reports/explain_train.md')
 )
 ```
 
@@ -524,21 +520,25 @@ generator.save_report(
 ## Evaluation Metrics (AI Grand Challenge Alignment)
 
 ### Detection Accuracy (50%)
+
 - **Static Confidence**: Higher confidence → better precision
 - **CWE Coverage**: 42+ CWE categories supported
 - **Multi-Language**: 8 languages with language-specific rules
 
 ### Vulnerability Detection (20%)
+
 - **Total Detected**: Tracked in explainability summary
 - **Per-CWE Breakdown**: Available in explainability report
 - **Severity Distribution**: Critical/High/Medium/Low counts
 
 ### Explainability (10%)
+
 - **Comprehensive Reports**: CWE frequency, rule effectiveness, examples
 - **Precision Proxies**: TP/FP/FN metrics when ground truth available
 - **Confidence Scoring**: Per-detection and overall confidence
 
 ### Scalability (10%)
+
 - **Parallel Processing**: Multi-core with ProcessPoolExecutor
 - **Incremental Saves**: Fault-tolerant checkpointing
 - **Benchmarked**: 50K records in ~60 minutes with 16 workers
@@ -550,6 +550,7 @@ generator.save_report(
 ### Adding a New Language
 
 1. Create `src/static/analyzers/{language}_analyzer.py`:
+
    ```python
    from .base_analyzer import BaseAnalyzer
    
@@ -564,12 +565,7 @@ generator.save_report(
 
 2. Create `src/static/rules/{language}.yml` with detection rules
 
-3. Update `src/static/analyzers/language_map.py`:
-   ```python
-   from .newlang_analyzer import NewLanguageAnalyzer
-   
-   cls._analyzer_map['newlang'] = NewLanguageAnalyzer
-   ```
+3. Update imports in `run_all_analyzers.py`
 
 ### Adding a New Rule
 
@@ -599,7 +595,7 @@ MIT License - See repository for full license text.
 
 If you use this static analyzer in research or production, please cite:
 
-```
+```text
 CodeGuardian Static Analyzer (Phase 3.2)
 AI Grand Challenge PS-1: Source Code Vulnerability Detection
 2025

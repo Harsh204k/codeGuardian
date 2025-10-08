@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """
-Multi-language analyzer manager that coordinates all static analysis tools.
-This serves as the central hub for routing analysis requests to appropriate language-specific analyzers.
+Enhanced Parallel Multi-Language Analyzer
+Phase 3.2: Production-grade parallel processing with language-homogeneous batching
 """
 
 import json
-import sys
+import logging
+import multiprocessing
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
-import importlib.util
+from tqdm import tqdm
+import threading
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class Finding:
+    """Structured finding result"""
     id: str
     app: str
     language: str
@@ -30,315 +36,315 @@ class Finding:
     quickfix: dict = None
 
 
-class MultiLanguageAnalyzer:
+class EnhancedMultiAnalyzer:
     """
-    Coordinates multiple language-specific static analysis tools.
+    Enhanced multi-language analyzer with parallel processing capabilities.
+    
+    Features:
+    - ProcessPoolExecutor for true parallelism
+    - Language-homogeneous batching for efficiency
+    - Progress tracking with tqdm
+    - Atomic incremental writes
+    - Configurable workers
+    - C language support
     """
-
-    def __init__(self):
-        self.analyzers_dir = Path(__file__).parent
-        self.supported_languages = {
-            "python": "python_analyzer.py",
-            "cpp": "cpp_analyzer.py",
-            "c": "cpp_analyzer.py",  # Use C++ analyzer for C files
-            "php": "php_analyzer.py",
-            "javascript": "js_analyzer.py",
-            "js": "js_analyzer.py",
-            "typescript": "js_analyzer.py",  # Use JS analyzer for TypeScript
-            "ts": "js_analyzer.py",
-            "go": "go_analyzer.py",
-            "java": "java_analyzer.py",
-        }
-
-    def get_language_from_file(self, file_path: str) -> Optional[str]:
+    
+    def __init__(self, max_workers: Optional[int] = None, rule_engine=None):
         """
-        Determine programming language from file extension.
+        Initialize enhanced multi-analyzer
+        
+        Args:
+            max_workers: Number of parallel workers (default: CPU count - 1)
+            rule_engine: RuleEngine instance for rule loading
         """
-        path = Path(file_path)
-        ext = path.suffix.lower()
-
-        extension_map = {
-            ".py": "python",
-            ".cpp": "cpp",
-            ".cxx": "cpp",
-            ".cc": "cpp",
-            ".c++": "cpp",
-            ".c": "c",
-            ".h": "cpp",  # Treat headers as C++
-            ".hpp": "cpp",
-            ".php": "php",
-            ".php3": "php",
-            ".php4": "php",
-            ".php5": "php",
-            ".phtml": "php",
-            ".js": "javascript",
-            ".jsx": "javascript",
-            ".ts": "typescript",
-            ".tsx": "typescript",
-            ".go": "go",
-            ".java": "java",
-            ".class": "java",  # Compiled Java classes
-        }
-
-        return extension_map.get(ext)
-
-    def load_analyzer(self, language: str):
-        """
-        Dynamically load the appropriate analyzer module.
-        """
-        if language not in self.supported_languages:
-            return None
-
-        analyzer_file = self.supported_languages[language]
-        analyzer_path = self.analyzers_dir / analyzer_file
-
-        if not analyzer_path.exists():
-            print(f"Warning: Analyzer file {analyzer_path} not found", file=sys.stderr)
-            return None
-
+        self.max_workers = max_workers or max(1, multiprocessing.cpu_count() - 1)
+        self.rule_engine = rule_engine
+        self.analyzers = {}
+        self.write_lock = threading.Lock()
+        
+        # Initialize analyzers lazily
+        self._init_analyzers()
+        
+        logger.info(f"Enhanced MultiAnalyzer initialized with {self.max_workers} workers")
+    
+    def _init_analyzers(self):
+        """Initialize language-specific analyzers"""
         try:
-            spec = importlib.util.spec_from_file_location(
-                f"{language}_analyzer", analyzer_path
-            )
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                return module
-        except Exception as e:
-            print(f"Error loading analyzer for {language}: {e}", file=sys.stderr)
-            return None
-
-    def analyze_file(self, file_path: str, app_name: str = "App") -> Dict[str, Any]:
-        """
-        Analyze a single file using the appropriate language analyzer.
-        """
-        language = self.get_language_from_file(file_path)
-
-        if not language:
-            return {
-                "language": "unknown",
-                "file": file_path,
-                "analyzer": "none",
-                "findings_count": 0,
-                "findings": [],
-                "error": f"Unsupported file type: {Path(file_path).suffix}",
+            from .python_analyzer import PythonAnalyzer
+            from .java_analyzer import JavaAnalyzer
+            from .cpp_analyzer import CppAnalyzer
+            from .c_analyzer import CAnalyzer
+            from .js_analyzer import JSAnalyzer
+            from .php_analyzer import PHPAnalyzer
+            from .go_analyzer import GoAnalyzer
+            from .ruby_analyzer import RubyAnalyzer
+            
+            self.analyzers = {
+                'python': PythonAnalyzer(self.rule_engine),
+                'java': JavaAnalyzer(self.rule_engine),
+                'cpp': CppAnalyzer(self.rule_engine),
+                'c': CAnalyzer(self.rule_engine),
+                'c++': CppAnalyzer(self.rule_engine),
+                'javascript': JSAnalyzer(self.rule_engine),
+                'js': JSAnalyzer(self.rule_engine),
+                'typescript': JSAnalyzer(self.rule_engine),
+                'php': PHPAnalyzer(self.rule_engine),
+                'go': GoAnalyzer(self.rule_engine),
+                'golang': GoAnalyzer(self.rule_engine),
+                'ruby': RubyAnalyzer(self.rule_engine),
             }
-
-        analyzer = self.load_analyzer(language)
-
+            
+            logger.info(f"Initialized {len(self.analyzers)} language analyzers")
+            
+        except ImportError as e:
+            logger.warning(f"Some analyzers could not be imported: {e}")
+    
+    def analyze_dataset_parallel(self, dataset_path: Path, output_dir: Path,
+                                 batch_size: int = 100) -> Dict[str, Any]:
+        """
+        Analyze dataset in parallel with language-homogeneous batching.
+        
+        Args:
+            dataset_path: Path to input JSONL dataset
+            output_dir: Directory for output files
+            batch_size: Records per batch
+            
+        Returns:
+            Statistics dictionary
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load dataset
+        logger.info(f"Loading dataset from {dataset_path}")
+        records = self._load_dataset(dataset_path)
+        
+        if not records:
+            logger.warning("No records loaded")
+            return {'total_records': 0, 'analyzed': 0, 'skipped': 0}
+        
+        # Group records by language
+        by_language = self._group_by_language(records)
+        
+        logger.info(f"Processing {len(records)} records across {len(by_language)} languages")
+        
+        # Process each language batch in parallel
+        all_results = []
+        stats = {
+            'total_records': len(records),
+            'analyzed': 0,
+            'skipped': 0,
+            'total_vulnerabilities': 0,
+            'unique_cwes': set(),
+            'languages': {}
+        }
+        
+        output_jsonl = output_dir / f"{dataset_path.stem}_static_enhanced.jsonl"
+        
+        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit batches
+            futures = {}
+            for language, lang_records in by_language.items():
+                # Split into batches
+                batches = [lang_records[i:i + batch_size] 
+                          for i in range(0, len(lang_records), batch_size)]
+                
+                for batch_idx, batch in enumerate(batches):
+                    future = executor.submit(
+                        self._analyze_batch_static,
+                        language,
+                        batch,
+                        batch_idx
+                    )
+                    futures[future] = (language, batch_idx)
+            
+            # Collect results with progress bar
+            desc = "Analyzing batches"
+            for future in tqdm(as_completed(futures), total=len(futures), desc=desc):
+                language, batch_idx = futures[future]
+                
+                try:
+                    results = future.result()
+                    
+                    # Update statistics
+                    stats['analyzed'] += len(results)
+                    all_results.extend(results)
+                    
+                    # Update language stats
+                    if language not in stats['languages']:
+                        stats['languages'][language] = {
+                            'total_records': 0,
+                            'total_vulnerabilities': 0,
+                            'avg_confidence': 0.0
+                        }
+                    
+                    for result in results:
+                        stats['languages'][language]['total_records'] += 1
+                        stats['languages'][language]['total_vulnerabilities'] += result.get('vulnerability_count', 0)
+                        stats['total_vulnerabilities'] += result.get('vulnerability_count', 0)
+                        stats['unique_cwes'].update(result.get('detected_cwes', []))
+                    
+                    # Atomic append to output file
+                    self._append_results(output_jsonl, results)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing {language} batch {batch_idx}: {e}")
+                    stats['skipped'] += len(by_language[language][batch_idx * batch_size:(batch_idx + 1) * batch_size])
+        
+        # Calculate averages
+        for lang_stats in stats['languages'].values():
+            if lang_stats['total_records'] > 0:
+                lang_stats['avg_confidence'] = (
+                    lang_stats['total_vulnerabilities'] / lang_stats['total_records']
+                )
+        
+        stats['unique_cwes'] = list(stats['unique_cwes'])
+        
+        # Save stats
+        stats_file = output_dir / f"{dataset_path.stem}_stats.json"
+        with open(stats_file, 'w', encoding='utf-8') as f:
+            json.dump(stats, f, indent=2)
+        
+        logger.info(f"Analysis complete: {stats['analyzed']} analyzed, {stats['skipped']} skipped")
+        logger.info(f"Results saved to {output_jsonl}")
+        
+        return stats
+    
+    def _analyze_batch_static(self, language: str, records: List[Dict[str, Any]], 
+                             batch_idx: int) -> List[Dict[str, Any]]:
+        """
+        Analyze a batch of records for a single language (worker function).
+        
+        Args:
+            language: Programming language
+            records: List of records to analyze
+            batch_idx: Batch index for logging
+            
+        Returns:
+            List of analysis results
+        """
+        results = []
+        
+        # Get analyzer for this language
+        analyzer = self.analyzers.get(language.lower())
+        
         if not analyzer:
-            return {
-                "language": language,
-                "file": file_path,
-                "analyzer": "none",
-                "findings_count": 0,
-                "findings": [],
-                "error": f"No analyzer available for {language}",
-            }
-
-        try:
-            # Call the analyzer's main analysis function
-            if hasattr(analyzer, "analyze_python_file") and language == "python":
-                return analyzer.analyze_python_file(file_path, app_name)
-            elif hasattr(analyzer, "analyze_cpp_file") and language in ["cpp", "c"]:
-                return analyzer.analyze_cpp_file(file_path, app_name)
-            elif hasattr(analyzer, "analyze_php_file") and language == "php":
-                return analyzer.analyze_php_file(file_path, app_name)
-            elif hasattr(analyzer, "analyze_js_file") and language in [
-                "javascript",
-                "js",
-                "typescript",
-                "ts",
-            ]:
-                return analyzer.analyze_js_file(file_path, app_name)
-            elif hasattr(analyzer, "analyze_go_file") and language == "go":
-                return analyzer.analyze_go_file(file_path, app_name)
-            elif hasattr(analyzer, "analyze_java_file") and language == "java":
-                return analyzer.analyze_java_file(file_path, app_name)
-            else:
-                return {
-                    "language": language,
-                    "file": file_path,
-                    "analyzer": "none",
-                    "findings_count": 0,
-                    "findings": [],
-                    "error": f"Analyzer function not found for {language}",
-                }
-
-        except Exception as e:
-            return {
-                "language": language,
-                "file": file_path,
-                "analyzer": "error",
-                "findings_count": 0,
-                "findings": [],
-                "error": f"Analysis failed: {str(e)}",
-            }
-
-    def analyze_directory(
-        self, directory_path: str, app_name: str = "App"
-    ) -> Dict[str, Any]:
-        """
-        Analyze all supported files in a directory recursively.
-        """
-        results = {
-            "app": app_name,
-            "directory": directory_path,
-            "total_files": 0,
-            "analyzed_files": 0,
-            "total_findings": 0,
-            "results_by_language": {},
-            "file_results": [],
-        }
-
-        directory = Path(directory_path)
-        if not directory.exists() or not directory.is_dir():
-            results["error"] = (
-                f"Directory {directory_path} does not exist or is not a directory"
-            )
+            logger.warning(f"No analyzer available for {language}")
+            # Return empty results
+            for record in records:
+                results.append({
+                    'id': record.get('id', 'unknown'),
+                    'language': language,
+                    'findings': [],
+                    'static_metrics': {},
+                    'static_flags': {},
+                    'static_confidence': 0.0,
+                    'detected_cwes': [],
+                    'vulnerability_count': 0
+                })
             return results
-
-        # Find all supported files, but exclude large or irrelevant directories such as
-        # virtualenvs, git metadata, datasets, build outputs, and node_modules.
-        supported_extensions = {
-            ".py",
-            ".cpp",
-            ".cxx",
-            ".cc",
-            ".c++",
-            ".c",
-            ".h",
-            ".hpp",
-            ".php",
-            ".php3",
-            ".php4",
-            ".php5",
-            ".phtml",
-            ".js",
-            ".jsx",
-            ".ts",
-            ".tsx",
-            ".go",
-        }
-
-        ignore_dirs = {
-            ".venv",
-            "venv",
-            ".git",
-            "node_modules",
-            "reports",
-            # "datasets",
-            "build",
-            "dist",
-            "__pycache__",
-            ".pytest_cache",
-        }
-
-        files_to_analyze = []
-        # Walk the tree but skip ignored directories
-        for path in directory.rglob("**/*"):
+        
+        # Analyze each record
+        for record in records:
             try:
-                if not path.exists():
+                code = record.get('code', '')
+                record_id = record.get('id', 'unknown')
+                
+                if not code:
+                    results.append(self._empty_result(record_id, language))
                     continue
-                # skip directories
-                if path.is_dir():
-                    # if any part of the path is in ignore list, skip this directory (and its children)
-                    if any(part in ignore_dirs for part in path.parts):
-                        # skip descending into this directory by continuing
-                        continue
-                    else:
-                        continue
-
-                # skip files under ignored directories
-                if any(part in ignore_dirs for part in path.parts):
-                    continue
-
-                if path.suffix.lower() in supported_extensions:
-                    files_to_analyze.append(path)
-            except Exception:
-                # be defensive: skip any path we cannot stat
-                continue
-
-        results["total_files"] = len(files_to_analyze)
-
-        for file_path in files_to_analyze:
-            file_result = self.analyze_file(str(file_path), app_name)
-            results["file_results"].append(file_result)
-
-            if file_result["findings_count"] > 0:
-                results["analyzed_files"] += 1
-                results["total_findings"] += file_result["findings_count"]
-
-                language = file_result["language"]
-                if language not in results["results_by_language"]:
-                    results["results_by_language"][language] = {
-                        "files": 0,
-                        "findings": 0,
-                    }
-                results["results_by_language"][language]["files"] += 1
-                results["results_by_language"][language]["findings"] += file_result[
-                    "findings_count"
-                ]
-
-        return results
-
-    def convert_to_findings_format(
-        self, analysis_result: Dict[str, Any]
-    ) -> List[Finding]:
-        """
-        Convert analysis result to the Finding dataclass format used by the main scanner.
-        """
-        findings = []
-
-        if "file_results" in analysis_result:
-            # Multiple files result
-            for file_result in analysis_result["file_results"]:
-                findings.extend(self._convert_single_file_findings(file_result))
-        else:
-            # Single file result
-            findings.extend(self._convert_single_file_findings(analysis_result))
-
-        return findings
-
-    def _convert_single_file_findings(
-        self, file_result: Dict[str, Any]
-    ) -> List[Finding]:
-        """Convert findings from a single file result."""
-        findings = []
-
-        for finding_dict in file_result.get("findings", []):
-            try:
-                finding = Finding(**finding_dict)
-                findings.append(finding)
+                
+                # Perform analysis
+                result = analyzer.analyze(code, record_id)
+                results.append(result)
+                
             except Exception as e:
-                print(f"Error converting finding: {e}", file=sys.stderr)
-                continue
+                logger.error(f"Error analyzing {record.get('id', 'unknown')}: {e}")
+                results.append(self._empty_result(record.get('id', 'unknown'), language))
+        
+        return results
+    
+    def _load_dataset(self, dataset_path: Path) -> List[Dict[str, Any]]:
+        """Load JSONL dataset"""
+        records = []
+        
+        try:
+            with open(dataset_path, 'r', encoding='utf-8') as f:
+                for line_no, line in enumerate(f, 1):
+                    try:
+                        record = json.loads(line)
+                        records.append(record)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse line {line_no}: {e}")
+        except Exception as e:
+            logger.error(f"Error loading dataset {dataset_path}: {e}")
+        
+        return records
+    
+    def _group_by_language(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict]]:
+        """Group records by programming language"""
+        by_language = {}
+        
+        for record in records:
+            language = record.get('language', 'unknown').lower()
+            
+            if language not in by_language:
+                by_language[language] = []
+            
+            by_language[language].append(record)
+        
+        return by_language
+    
+    def _append_results(self, output_path: Path, results: List[Dict[str, Any]]):
+        """Atomically append results to JSONL file"""
+        with self.write_lock:
+            with open(output_path, 'a', encoding='utf-8') as f:
+                for result in results:
+                    f.write(json.dumps(result) + '\n')
+    
+    def _empty_result(self, record_id: str, language: str) -> Dict[str, Any]:
+        """Generate empty result for skipped records"""
+        return {
+            'id': record_id,
+            'language': language,
+            'findings': [],
+            'static_metrics': {},
+            'static_flags': {},
+            'static_confidence': 0.0,
+            'detected_cwes': [],
+            'vulnerability_count': 0,
+            'severity_distribution': {
+                'CRITICAL': 0,
+                'HIGH': 0,
+                'MEDIUM': 0,
+                'LOW': 0
+            }
+        }
+    
+    def analyze_single(self, code: str, language: str, record_id: str = "unknown") -> Dict[str, Any]:
+        """
+        Analyze a single code snippet synchronously.
+        
+        Args:
+            code: Source code
+            language: Programming language
+            record_id: Record identifier
+            
+        Returns:
+            Analysis result dictionary
+        """
+        analyzer = self.analyzers.get(language.lower())
+        
+        if not analyzer:
+            logger.warning(f"No analyzer available for {language}")
+            return self._empty_result(record_id, language)
+        
+        try:
+            return analyzer.analyze(code, record_id)
+        except Exception as e:
+            logger.error(f"Error analyzing {record_id}: {e}")
+            return self._empty_result(record_id, language)
 
-        return findings
 
-
-def main():
-    """CLI interface for multi-language static analysis."""
-    if len(sys.argv) < 2:
-        print("Usage: python multi_analyzer.py <file_or_directory> [app_name]")
-        sys.exit(1)
-
-    target_path = sys.argv[1]
-    app_name = sys.argv[2] if len(sys.argv) > 2 else "App"
-
-    if not Path(target_path).exists():
-        print(f"Error: {target_path} does not exist")
-        sys.exit(1)
-
-    analyzer = MultiLanguageAnalyzer()
-
-    if Path(target_path).is_file():
-        result = analyzer.analyze_file(target_path, app_name)
-    else:
-        result = analyzer.analyze_directory(target_path, app_name)
-
-    print(json.dumps(result, indent=2))
-
-
-if __name__ == "__main__":
-    main()
+# Backward compatibility alias
+MultiAnalyzer = EnhancedMultiAnalyzer
