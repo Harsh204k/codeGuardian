@@ -12,8 +12,7 @@ import uuid
 from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import dataclass, asdict
-from engine.analyzers import normalize
-
+# from src.static.analyzers import normalize  # Uncomment if normalization module is available
 
 @dataclass
 class Finding:
@@ -209,12 +208,13 @@ def main():
         sys.exit(1)
 
     result = analyze_python_file(target_path, app_name)
-    try:
-        normalized = normalize.normalize_result(result)
-        print(json.dumps(normalized, indent=2))
-    except Exception:
-        # Fallback to original result if normalization fails
-        print(json.dumps(result, indent=2))
+    # Normalization commented out due to missing module
+    # try:
+    #     normalized = normalize.normalize_result(result)
+    #     print(json.dumps(normalized, indent=2))
+    # except Exception:
+    #     # Fallback to original result if normalization fails
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
