@@ -80,10 +80,10 @@ def process_language_file(csv_path: str, language: str, global_index_offset: int
         print(f"Available columns: {available_cols}")
         
         # Check which expected columns are present
-        code_cols = ['code', 'Code', 'source_code', 'func', 'function']
-        label_cols = ['label', 'Label', 'vulnerable', 'target', 'is_vulnerable']
-        cwe_cols = ['CWE_ID', 'cwe_id', 'CWE', 'cwe']
-        cve_cols = ['CVE_ID', 'cve_id', 'CVE', 'cve']
+        code_cols = ['vul_code', 'code', 'Code', 'source_code', 'func', 'function']
+        label_cols = ['is_vulnerable', 'label', 'Label', 'vulnerable', 'target']
+        cwe_cols = ['cwe_id', 'CWE_ID', 'CWE', 'cwe']
+        cve_cols = ['cve_id', 'CVE_ID', 'CVE', 'cve']
         
         print(f"\nColumn mapping check:")
         print(f"  Code columns: {[c for c in code_cols if c in available_cols]}")
@@ -102,19 +102,18 @@ def process_language_file(csv_path: str, language: str, global_index_offset: int
     
     for idx, row in enumerate(tqdm(csv_data, desc=f"Processing {language}")):
         try:
-            # Extract fields with extended fallback options
-            code = (row.get('func') or row.get('function') or 
+            # Extract fields with extended fallback options (vul_code is the actual column name!)
+            code = (row.get('vul_code') or row.get('func') or row.get('function') or 
                    row.get('code') or row.get('Code') or row.get('source_code') or '')
-            label = (row.get('target') or row.get('label') or 
-                    row.get('Label') or row.get('vulnerable') or 
-                    row.get('is_vulnerable') or '0')
-            cwe_id = (row.get('CWE') or row.get('cwe') or 
-                     row.get('CWE_ID') or row.get('cwe_id') or '')
-            cve_id = (row.get('CVE') or row.get('cve') or 
-                     row.get('CVE_ID') or row.get('cve_id') or '')
-            project = row.get('project', row.get('Project', ''))
-            file_name = row.get('file', row.get('File', row.get('filename', row.get('file_path', ''))))
-            func_name = row.get('function', row.get('method', row.get('func_name', '')))
+            label = (row.get('is_vulnerable') or row.get('target') or row.get('label') or 
+                    row.get('Label') or row.get('vulnerable') or '0')
+            cwe_id = (row.get('cwe_id') or row.get('CWE') or row.get('cwe') or 
+                     row.get('CWE_ID') or '')
+            cve_id = (row.get('cve_id') or row.get('CVE') or row.get('cve') or 
+                     row.get('CVE_ID') or '')
+            project = row.get('repo_owner', row.get('project', row.get('Project', '')))
+            file_name = row.get('file_name', row.get('file', row.get('File', row.get('filename', row.get('file_path', '')))))
+            func_name = row.get('method_name', row.get('function', row.get('method', row.get('func_name', ''))))
             
             # DEBUG: Print first record details
             if idx == 0:
