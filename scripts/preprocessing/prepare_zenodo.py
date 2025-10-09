@@ -70,22 +70,68 @@ def process_language_file(csv_path: str, language: str, global_index_offset: int
     
     logger.info(f"Processing {len(csv_data)} records from {language} file")
     
+    # DEBUG: Print first row to see actual column names
+    if csv_data and len(csv_data) > 0:
+        available_cols = list(csv_data[0].keys())
+        print(f"\n{'='*60}")
+        print(f"[DEBUG] CSV Column Analysis for {language}")
+        print(f"{'='*60}")
+        print(f"Total columns: {len(available_cols)}")
+        print(f"Available columns: {available_cols}")
+        
+        # Check which expected columns are present
+        code_cols = ['code', 'Code', 'source_code', 'func', 'function']
+        label_cols = ['label', 'Label', 'vulnerable', 'target', 'is_vulnerable']
+        cwe_cols = ['CWE_ID', 'cwe_id', 'CWE', 'cwe']
+        cve_cols = ['CVE_ID', 'cve_id', 'CVE', 'cve']
+        
+        print(f"\nColumn mapping check:")
+        print(f"  Code columns: {[c for c in code_cols if c in available_cols]}")
+        print(f"  Label columns: {[c for c in label_cols if c in available_cols]}")
+        print(f"  CWE columns: {[c for c in cwe_cols if c in available_cols]}")
+        print(f"  CVE columns: {[c for c in cve_cols if c in available_cols]}")
+        
+        print(f"\nFirst row sample:")
+        sample = dict(list(csv_data[0].items())[:5])
+        for k, v in sample.items():
+            val_str = str(v)[:100] + "..." if len(str(v)) > 100 else str(v)
+            print(f"  {k}: {val_str}")
+        print(f"{'='*60}\n")
+    
+    rejected_reasons = {"code_invalid": 0, "validation_failed": 0, "exception": 0}
+    
     for idx, row in enumerate(tqdm(csv_data, desc=f"Processing {language}")):
         try:
-            # Extract fields (field names may vary)
-            code = row.get('code', row.get('Code', row.get('source_code', '')))
-            label = row.get('label', row.get('Label', row.get('vulnerable', '0')))
-            cwe_id = row.get('CWE_ID', row.get('cwe_id', row.get('CWE', '')))
-            cve_id = row.get('CVE_ID', row.get('cve_id', row.get('CVE', '')))
+            # Extract fields with extended fallback options
+            code = (row.get('func') or row.get('function') or 
+                   row.get('code') or row.get('Code') or row.get('source_code') or '')
+            label = (row.get('target') or row.get('label') or 
+                    row.get('Label') or row.get('vulnerable') or 
+                    row.get('is_vulnerable') or '0')
+            cwe_id = (row.get('CWE') or row.get('cwe') or 
+                     row.get('CWE_ID') or row.get('cwe_id') or '')
+            cve_id = (row.get('CVE') or row.get('cve') or 
+                     row.get('CVE_ID') or row.get('cve_id') or '')
             project = row.get('project', row.get('Project', ''))
-            file_name = row.get('file', row.get('File', row.get('filename', '')))
+            file_name = row.get('file', row.get('File', row.get('filename', row.get('file_path', ''))))
             func_name = row.get('function', row.get('method', row.get('func_name', '')))
+            
+            # DEBUG: Print first record details
+            if idx == 0:
+                print(f"[DEBUG] Extracted - code_len={len(str(code))}, label={label}, cwe={cwe_id}, cve={cve_id}")
             
             # Sanitize code
             code = sanitize_code(code, language=language, normalize_ws=True)
             
+            # DEBUG: After sanitization
+            if idx == 0:
+                print(f"[DEBUG] After sanitize - code_len={len(str(code))}")
+            
             # Validate code
             if not is_valid_code(code, min_length=10):
+                rejected_reasons["code_invalid"] += 1
+                if idx == 0:
+                    print(f"[DEBUG] Code validation FAILED - is_valid_code returned False")
                 continue
             
             # Create intermediate record
@@ -112,18 +158,29 @@ def process_language_file(csv_path: str, language: str, global_index_offset: int
             # Validate record
             is_valid, errors = validate_record(unified_record, use_jsonschema=True)
             if not is_valid:
-                logger.warning(f"Validation failed for record {idx}: {errors}")
-                logger.debug(f"Failed record: id={unified_record.get('id')}, "
-                           f"language={unified_record.get('language')}, "
-                           f"label={unified_record.get('label')}, "
-                           f"code_len={len(unified_record.get('code', ''))}")
+                rejected_reasons["validation_failed"] += 1
+                if idx < 3:  # Print first 3 validation failures
+                    logger.warning(f"Validation failed for record {idx}: {errors}")
+                    logger.debug(f"Failed record: id={unified_record.get('id')}, "
+                               f"language={unified_record.get('language')}, "
+                               f"label={unified_record.get('label')}, "
+                               f"code_len={len(unified_record.get('code', ''))}")
                 continue
             
             records.append(unified_record)
             
         except Exception as e:
-            logger.warning(f"Error processing row {idx} in {csv_path}: {e}")
+            rejected_reasons["exception"] += 1
+            if idx < 3:  # Print first 3 exceptions
+                logger.warning(f"Error processing row {idx} in {csv_path}: {e}")
             continue
+    
+    # Print rejection summary
+    print(f"\n[DEBUG] Rejection summary for {language}:")
+    print(f"  - Code invalid: {rejected_reasons['code_invalid']}")
+    print(f"  - Validation failed: {rejected_reasons['validation_failed']}")
+    print(f"  - Exceptions: {rejected_reasons['exception']}")
+    print(f"  - Successfully processed: {len(records)}")
     
     logger.info(f"Extracted {len(records)} valid records from {language}")
     return records
