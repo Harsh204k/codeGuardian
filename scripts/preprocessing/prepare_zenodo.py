@@ -113,6 +113,10 @@ def process_language_file(csv_path: str, language: str, global_index_offset: int
             is_valid, errors = validate_record(unified_record, use_jsonschema=True)
             if not is_valid:
                 logger.warning(f"Validation failed for record {idx}: {errors}")
+                logger.debug(f"Failed record: id={unified_record.get('id')}, "
+                           f"language={unified_record.get('language')}, "
+                           f"label={unified_record.get('label')}, "
+                           f"code_len={len(unified_record.get('code', ''))}")
                 continue
             
             records.append(unified_record)

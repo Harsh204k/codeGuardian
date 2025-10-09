@@ -8,6 +8,7 @@ rich>=13.0.0
 requests>=2.31.0
 click>=8.0.0
 tqdm>=4.64.0
+jsonschema>=4.17.0
 pathlib2>=2.3.0; python_version < '3.4'
 
 ###############################

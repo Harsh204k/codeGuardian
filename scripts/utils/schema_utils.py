@@ -383,11 +383,11 @@ def validate_record(record: Dict[str, Any], use_jsonschema: bool = True) -> tupl
             if code_len < 10:
                 errors.append(f"Code snippet too short ({code_len} characters, minimum 10)")
         
-        # Validate language is not empty/unknown
+        # Validate language is not empty (allow "unknown" as fallback)
         if "language" in record:
-            lang = record.get("language", "").strip().lower()
-            if not lang or lang == "unknown":
-                errors.append("Language field is empty or unknown")
+            lang = record.get("language", "").strip()
+            if not lang:
+                errors.append("Language field is empty")
         
         # Validate CWE format if present
         if record.get("cwe_id"):
