@@ -33,6 +33,7 @@ from scripts.utils.schema_utils import (
     map_to_unified_schema, validate_record, 
     deduplicate_by_code_hash, save_schema_definition
 )
+from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
 # Setup logging
 logging.basicConfig(
@@ -241,14 +242,14 @@ def main():
     parser.add_argument(
         '--datasets-dir',
         type=str,
-        default='../../datasets',
-        help='Root directory containing all datasets'
+        default=None,
+        help='Root directory containing all datasets (auto-detected if not provided)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='../../datasets/unified',
-        help='Output directory for unified dataset'
+        default=None,
+        help='Output directory for unified dataset (auto-detected if not provided)'
     )
     parser.add_argument(
         '--datasets',
@@ -270,14 +271,25 @@ def main():
     
     args = parser.parse_args()
     
-    # Convert to absolute paths
-    script_dir = Path(__file__).parent
-    datasets_dir = (script_dir / args.datasets_dir).resolve()
-    output_dir = (script_dir / args.output_dir).resolve()
+    # Print environment info
+    print_environment_info()
+    
+    # Get paths using Kaggle-compatible helper
+    if args.datasets_dir:
+        datasets_dir = Path(args.datasets_dir).resolve()
+    else:
+        datasets_dir = get_dataset_path("")  # Root datasets directory
+    
+    if args.output_dir:
+        output_dir = Path(args.output_dir).resolve()
+    else:
+        output_dir = get_output_path("unified")
     
     logger.info("="*60)
     logger.info("STARTING UNIFIED DATASET NORMALIZATION")
     logger.info("="*60)
+    logger.info(f"[INFO] Reading datasets from: {datasets_dir}")
+    logger.info(f"[INFO] Writing unified dataset to: {output_dir}")
     
     # Ensure output directory exists
     ensure_dir(str(output_dir))

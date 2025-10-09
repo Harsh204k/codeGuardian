@@ -30,6 +30,7 @@ from scripts.utils.schema_utils import (
     normalize_language, normalize_cwe_id,
     map_to_unified_schema, validate_record
 )
+from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
 # Setup logging
 logging.basicConfig(
@@ -240,14 +241,14 @@ def main():
     parser.add_argument(
         '--input-dir',
         type=str,
-        default='../../datasets/juliet',
-        help='Input directory containing Juliet testcases'
+        default=None,
+        help='Input directory containing Juliet testcases (auto-detected if not provided)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='../../datasets/juliet/processed',
-        help='Output directory for processed files'
+        default=None,
+        help='Output directory for processed files (auto-detected if not provided)'
     )
     parser.add_argument(
         '--languages',
@@ -264,12 +265,21 @@ def main():
     
     args = parser.parse_args()
     
-    # Convert to absolute paths
-    script_dir = Path(__file__).parent
-    input_dir = (script_dir / args.input_dir).resolve()
-    output_dir = (script_dir / args.output_dir).resolve()
+    # Print environment info
+    print_environment_info()
     
-    logger.info(f"Processing Juliet dataset from {input_dir}")
+    # Get paths using Kaggle-compatible helper
+    if args.input_dir:
+        input_dir = Path(args.input_dir).resolve()
+    else:
+        input_dir = get_dataset_path("juliet")
+    
+    if args.output_dir:
+        output_dir = Path(args.output_dir).resolve()
+    else:
+        output_dir = get_output_path("juliet/processed")
+    
+    logger.info(f"[INFO] Processing Juliet dataset from: {input_dir}")
     
     # Ensure output directory exists
     ensure_dir(str(output_dir))

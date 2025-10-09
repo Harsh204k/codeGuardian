@@ -45,6 +45,7 @@ except ImportError:
     print("⚠️  tqdm not available, progress bars disabled")
 
 from scripts.utils.io_utils import read_jsonl, write_jsonl, write_json, ensure_dir
+from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
 # Setup logging
 logging.basicConfig(
@@ -367,20 +368,20 @@ def main():
     parser.add_argument(
         '--input-file',
         type=str,
-        default='../datasets/features/features_all.jsonl',
-        help='Path to feature-enriched input dataset'
+        default=None,
+        help='Path to feature-enriched input dataset (auto-detected if not provided)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='../datasets/processed',
-        help='Output directory for split files'
+        default=None,
+        help='Output directory for split files (auto-detected if not provided)'
     )
     parser.add_argument(
         '--summary-file',
         type=str,
-        default='../datasets/processed/split_summary.json',
-        help='Path to split summary JSON'
+        default=None,
+        help='Path to split summary JSON (auto-detected if not provided)'
     )
     parser.add_argument(
         '--train-ratio',
@@ -409,17 +410,38 @@ def main():
     
     args = parser.parse_args()
     
+    # Print environment info
+    print_environment_info()
+    
     # Validate ratios
     total_ratio = args.train_ratio + args.val_ratio + args.test_ratio
     if abs(total_ratio - 1.0) > 1e-6:
         logger.error(f"Split ratios must sum to 1.0, got {total_ratio}")
         sys.exit(1)
     
-    # Convert to absolute paths
-    script_dir = Path(__file__).parent
-    input_file = (script_dir / args.input_file).resolve()
-    output_dir = (script_dir / args.output_dir).resolve()
-    summary_file = (script_dir / args.summary_file).resolve()
+    # Get paths using Kaggle-compatible helper
+    if args.input_file:
+        input_file = Path(args.input_file).resolve()
+    else:
+        # Try features_all.jsonl first, fall back to validated.jsonl
+        features_dir = get_output_path("features")
+        input_file = features_dir / "features_all.jsonl"
+        if not input_file.exists():
+            unified_dir = get_output_path("unified")
+            input_file = unified_dir / "validated.jsonl"
+    
+    if args.output_dir:
+        output_dir = Path(args.output_dir).resolve()
+    else:
+        output_dir = get_output_path("processed")
+    
+    if args.summary_file:
+        summary_file = Path(args.summary_file).resolve()
+    else:
+        summary_file = output_dir / "split_summary.json"
+    
+    logger.info(f"[INFO] Reading input from: {input_file}")
+    logger.info(f"[INFO] Writing splits to: {output_dir}")
     
     # Check if input exists
     if not input_file.exists():

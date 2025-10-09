@@ -30,6 +30,7 @@ from scripts.utils.schema_utils import (
     normalize_language, normalize_cwe_id, normalize_cve_id,
     map_to_unified_schema, validate_record
 )
+from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
 # Setup logging
 logging.basicConfig(
@@ -149,14 +150,14 @@ def main():
     parser.add_argument(
         '--input-dir',
         type=str,
-        default='../../datasets/megavul/raw',
-        help='Input directory containing raw MegaVul files'
+        default=None,
+        help='Input directory containing raw MegaVul files (auto-detected if not provided)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='../../datasets/megavul/processed',
-        help='Output directory for processed files'
+        default=None,
+        help='Output directory for processed files (auto-detected if not provided)'
     )
     parser.add_argument(
         '--max-records',
@@ -167,12 +168,21 @@ def main():
     
     args = parser.parse_args()
     
-    # Convert to absolute paths
-    script_dir = Path(__file__).parent
-    input_dir = (script_dir / args.input_dir).resolve()
-    output_dir = (script_dir / args.output_dir).resolve()
+    # Print environment info
+    print_environment_info()
     
-    logger.info(f"Processing MegaVul dataset from {input_dir}")
+    # Get paths using Kaggle-compatible helper
+    if args.input_dir:
+        input_dir = Path(args.input_dir).resolve()
+    else:
+        input_dir = get_dataset_path("megavul")
+    
+    if args.output_dir:
+        output_dir = Path(args.output_dir).resolve()
+    else:
+        output_dir = get_output_path("megavul/processed")
+    
+    logger.info(f"[INFO] Processing MegaVul dataset from: {input_dir}")
     
     # Check if dataset exists
     if not input_dir.exists():

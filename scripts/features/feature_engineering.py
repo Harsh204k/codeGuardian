@@ -40,6 +40,7 @@ from scripts.utils.io_utils import (
     chunked_read_jsonl, chunked_write_jsonl,
     write_json, ensure_dir
 )
+from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
 # Setup logging
 logging.basicConfig(
@@ -662,14 +663,14 @@ def main():
     parser.add_argument(
         "--input",
         type=str,
-        default="datasets/unified/validated.jsonl",
-        help="Input JSONL file (validated dataset)"
+        default=None,
+        help="Input JSONL file (validated dataset, auto-detected if not provided)"
     )
     parser.add_argument(
         "--output-csv",
         type=str,
-        default="datasets/features/features_static.csv",
-        help="Output CSV file with feature matrix"
+        default=None,
+        help="Output CSV file with feature matrix (auto-detected if not provided)"
     )
     parser.add_argument(
         "--output-jsonl",
@@ -680,8 +681,8 @@ def main():
     parser.add_argument(
         "--stats",
         type=str,
-        default="datasets/features/stats_features.json",
-        help="Output statistics JSON file"
+        default=None,
+        help="Output statistics JSON file (auto-detected if not provided)"
     )
     parser.add_argument(
         "--chunk-size",
@@ -692,11 +693,37 @@ def main():
     
     args = parser.parse_args()
     
+    # Print environment info
+    print_environment_info()
+    
+    # Get paths using Kaggle-compatible helper
+    if args.input:
+        input_path = args.input
+    else:
+        unified_dir = get_output_path("unified")
+        input_path = str(unified_dir / "validated.jsonl")
+    
+    if args.output_csv:
+        output_csv_path = args.output_csv
+    else:
+        features_dir = get_output_path("features")
+        output_csv_path = str(features_dir / "features_static.csv")
+    
+    if args.stats:
+        stats_path = args.stats
+    else:
+        features_dir = get_output_path("features")
+        stats_path = str(features_dir / "stats_features.json")
+    
+    logger.info(f"[INFO] Reading input from: {input_path}")
+    logger.info(f"[INFO] Writing features to: {output_csv_path}")
+    logger.info(f"[INFO] Writing statistics to: {stats_path}")
+    
     process_dataset_to_csv(
-        input_path=args.input,
-        output_csv_path=args.output_csv,
+        input_path=input_path,
+        output_csv_path=output_csv_path,
         output_jsonl_path=args.output_jsonl,
-        stats_path=args.stats,
+        stats_path=stats_path,
         chunk_size=args.chunk_size
     )
 

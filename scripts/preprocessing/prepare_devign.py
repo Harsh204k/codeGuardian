@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from scripts.utils.io_utils import read_csv, read_json, write_jsonl, write_json, ensure_dir, ProgressWriter
 from scripts.utils.text_cleaner import sanitize_code, is_valid_code
 from scripts.utils.schema_utils import map_to_unified_schema, validate_record, normalize_language
+from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
 # Setup logging
 logging.basicConfig(
@@ -216,14 +217,14 @@ def main():
     parser.add_argument(
         '--input-dir',
         type=str,
-        default='../../datasets/devign/raw',
-        help='Input directory containing raw Devign files'
+        default=None,
+        help='Input directory containing raw Devign files (auto-detected if not provided)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='../../datasets/devign/processed',
-        help='Output directory for processed files'
+        default=None,
+        help='Output directory for processed files (auto-detected if not provided)'
     )
     parser.add_argument(
         '--max-records',
@@ -234,12 +235,21 @@ def main():
     
     args = parser.parse_args()
     
-    # Convert to absolute paths
-    script_dir = Path(__file__).parent
-    input_dir = (script_dir / args.input_dir).resolve()
-    output_dir = (script_dir / args.output_dir).resolve()
+    # Print environment info
+    print_environment_info()
     
-    logger.info(f"Processing Devign dataset from {input_dir}")
+    # Get paths using Kaggle-compatible helper
+    if args.input_dir:
+        input_dir = Path(args.input_dir).resolve()
+    else:
+        input_dir = get_dataset_path("devign/raw")
+    
+    if args.output_dir:
+        output_dir = Path(args.output_dir).resolve()
+    else:
+        output_dir = get_output_path("devign/processed")
+    
+    logger.info(f"[INFO] Processing Devign dataset from: {input_dir}")
     
     # Ensure output directory exists
     ensure_dir(str(output_dir))
@@ -295,14 +305,14 @@ def main():
     
     # Save processed records
     output_file = output_dir / "raw_cleaned.jsonl"
-    logger.info(f"Saving {len(all_records)} records to {output_file}")
+    logger.info(f"[INFO] Saving {len(all_records)} records to: {output_file}")
     write_jsonl(all_records, str(output_file))
     
     # Generate and save statistics
     stats = generate_stats(all_records)
     stats_file = output_dir / "stats.json"
     write_json(stats, str(stats_file))
-    logger.info(f"Statistics saved to {stats_file}")
+    logger.info(f"[INFO] Statistics saved to: {stats_file}")
     
     # Print summary
     print("\n" + "="*60)

@@ -30,6 +30,7 @@ from scripts.utils.schema_utils import (
     normalize_language, normalize_cwe_id, normalize_cve_id,
     map_to_unified_schema, validate_record
 )
+from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
 # Setup logging
 logging.basicConfig(
@@ -177,14 +178,14 @@ def main():
     parser.add_argument(
         '--input-dir',
         type=str,
-        default='../../datasets/zenodo',
-        help='Input directory containing raw Zenodo CSV files'
+        default=None,
+        help='Input directory containing raw Zenodo CSV files (auto-detected if not provided)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='../../datasets/zenodo/processed',
-        help='Output directory for processed files'
+        default=None,
+        help='Output directory for processed files (auto-detected if not provided)'
     )
     parser.add_argument(
         '--languages',
@@ -201,12 +202,21 @@ def main():
     
     args = parser.parse_args()
     
-    # Convert to absolute paths
-    script_dir = Path(__file__).parent
-    input_dir = (script_dir / args.input_dir).resolve()
-    output_dir = (script_dir / args.output_dir).resolve()
+    # Print environment info
+    print_environment_info()
     
-    logger.info(f"Processing Zenodo dataset from {input_dir}")
+    # Get paths using Kaggle-compatible helper
+    if args.input_dir:
+        input_dir = Path(args.input_dir).resolve()
+    else:
+        input_dir = get_dataset_path("zenodo")
+    
+    if args.output_dir:
+        output_dir = Path(args.output_dir).resolve()
+    else:
+        output_dir = get_output_path("zenodo/processed")
+    
+    logger.info(f"[INFO] Processing Zenodo dataset from: {input_dir}")
     
     # Ensure output directory exists
     ensure_dir(str(output_dir))
@@ -253,14 +263,14 @@ def main():
     
     # Save processed records
     output_file = output_dir / "raw_cleaned.jsonl"
-    logger.info(f"Saving {len(all_records)} records to {output_file}")
+    logger.info(f"[INFO] Saving {len(all_records)} records to: {output_file}")
     write_jsonl(all_records, str(output_file))
     
     # Generate and save statistics
     stats = generate_stats(all_records)
     stats_file = output_dir / "stats.json"
     write_json(stats, str(stats_file))
-    logger.info(f"Statistics saved to {stats_file}")
+    logger.info(f"[INFO] Statistics saved to: {stats_file}")
     
     # Print summary
     print("\n" + "="*60)
