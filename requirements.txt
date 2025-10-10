@@ -12,7 +12,7 @@
 pyyaml>=6.0
 regex>=2023.0.0
 openpyxl>=3.1.0
-rich>=13.0.0,<14.0.0      # Pin to avoid bigframes conflict
+rich>=12.4.4,<14.0.0      # Pin to avoid bigframes conflict
 requests>=2.31.0
 click>=8.0.0
 tqdm>=4.64.0
@@ -75,6 +75,11 @@ pytest-cov>=4.0.0
 ###############################
 # Kaggle-Specific: RAPIDS/cuDF compatibility
 ###############################
+# Ensure BigQuery-related packages match bigframes expectations
+google-cloud-bigquery>=3.31.0
+google-cloud-bigquery-storage>=2.30.0,<3.0.0
+google-api-core>=2.10.2,<3.0.0
+
 # Force cudf-polars to match cudf version (pre-installed on Kaggle)
 # Uncomment if you see cudf-polars version mismatch errors:
 # cudf-polars-cu12==25.2.2
