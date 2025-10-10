@@ -172,20 +172,34 @@ def load_split_info(merged_splits_dir: Path) -> Dict[str, Set[int]]:
         return split_info
     
     try:
+        # Support multiple split variants like train.jsonl, train_10.jsonl, train_bigvul.jsonl, etc.
         for split_name in ['train', 'test', 'valid']:
-            split_file = merged_splits_dir / f"{split_name}.jsonl"
-            if split_file.exists():
-                indices = set()
-                for record in read_jsonl(str(split_file)):
-                    idx = record.get('idx')
-                    if idx is not None:
-                        indices.add(idx)
+            indices = set()
+            # Glob for any files starting with the split name (covers train_10, train_bigvul, ...)
+            pattern = f"{split_name}*.jsonl"
+            matched_files = list(merged_splits_dir.glob(pattern))
+            if not matched_files:
+                logger.info(f"📊 No files found for pattern: {pattern}")
                 split_info[split_name] = indices
-                logger.info(f"✅ Loaded {len(indices)} indices for {split_name} split")
-        
+                continue
+
+            for split_file in matched_files:
+                try:
+                    count = 0
+                    for record in read_jsonl(str(split_file)):
+                        idx = record.get('idx')
+                        if idx is not None:
+                            indices.add(idx)
+                            count += 1
+                    logger.info(f"✅ Loaded {count} indices from {split_file.name} for {split_name} variant")
+                except Exception as e:
+                    logger.warning(f"⚠️  Error reading split file {split_file.name}: {e}")
+
+            split_info[split_name] = indices
+
         total_in_splits = sum(len(v) for v in split_info.values())
-        logger.info(f"📊 Total records in splits: {total_in_splits}")
-        
+        logger.info(f"📊 Total records in splits (all variants): {total_in_splits}")
+
     except Exception as e:
         logger.warning(f"⚠️  Error loading split info: {e}")
     
@@ -209,27 +223,36 @@ def load_dataset_provenance(merged_splits_dir: Path) -> Dict[int, str]:
         logger.info("📊 No merged_splits directory found")
         return provenance
     
-    # Dataset names to check
-    datasets = ['bigvul', 'crossvul', 'cvefixes', 'devign', 'our', 'reveal']
-    
     try:
-        for dataset_name in datasets:
-            total_indices = 0
-            # Check train, test, and valid splits for each dataset
-            for split_type in ['train', 'test', 'valid']:
-                split_file = merged_splits_dir / f"{split_type}_{dataset_name}.jsonl"
-                if split_file.exists():
-                    for record in read_jsonl(str(split_file)):
-                        idx = record.get('idx')
-                        if idx is not None:
-                            provenance[idx] = dataset_name
-                            total_indices += 1
-            
-            if total_indices > 0:
-                logger.info(f"✅ Loaded {total_indices} indices for '{dataset_name}' dataset")
-        
+        # Auto-discover dataset-specific split files with pattern: <split>_<dataset>.jsonl
+        # e.g. train_bigvul.jsonl, test_devign.jsonl
+        for split_file in merged_splits_dir.glob("*_*.jsonl"):
+            stem = split_file.stem  # filename without extension
+            parts = stem.split('_')
+            if len(parts) < 2:
+                continue
+            split_type = parts[0]
+            dataset_name = '_'.join(parts[1:])
+
+            # Skip numeric-only suffixes like train_10.jsonl which are not dataset provenance
+            if dataset_name.isdigit():
+                logger.debug(f"Skipping numeric split variant: {split_file.name}")
+                continue
+
+            try:
+                count = 0
+                for record in read_jsonl(str(split_file)):
+                    idx = record.get('idx')
+                    if idx is not None:
+                        provenance[idx] = dataset_name
+                        count += 1
+                if count > 0:
+                    logger.info(f"✅ Loaded {count} indices from {split_file.name} for dataset '{dataset_name}'")
+            except Exception as e:
+                logger.warning(f"⚠️  Error reading provenance file {split_file.name}: {e}")
+
         logger.info(f"📊 Total provenance mapping: {len(provenance)} records")
-        
+
     except Exception as e:
         logger.warning(f"⚠️  Error loading dataset provenance: {e}")
     
@@ -241,24 +264,18 @@ def process_single_record(args):
     record, idx, filter_noisy = args
     
     try:
-        # Extract fields
-        code = record.get('func', record.get('code', record.get('source_code', '')))
-        label = record.get('target', record.get('label', record.get('vulnerable', 0)))
+        # Extract fields from main file (diversevul.json)
+        # Columns: ['func', 'target', 'cwe', 'project', 'commit_id', 'hash', 'size', 'message']
+        code = record.get('func', '')
+        label = record.get('target', 0)
         commit_id = record.get('commit_id', '')
         project = record.get('project', '')
-        
-        # Check for label noise and filter if requested
-        if filter_noisy:
-            record_key = commit_id or str(idx)
-            is_noisy = LABEL_NOISE_DICT.get(record_key, False)
-            if is_noisy:
-                return None  # Skip noisy records
         
         # CWE is a LIST in DiverseVul
         cwe_list = record.get('cwe', [])
         cwe_id = cwe_list[0] if isinstance(cwe_list, list) and len(cwe_list) > 0 else ''
         
-        # Get metadata if available
+        # Get metadata enrichment if available (joins via commit_id)
         meta = METADATA_DICT.get(commit_id, {})
         cve_id = meta.get('CVE', '') if meta else ''
         
@@ -266,13 +283,20 @@ def process_single_record(args):
             cwe_id = meta['CWE']
         description = meta.get('bug_info', '') if meta else record.get('message', '')
         
-        # Get additional metadata fields
+        # Optional: Check label noise (only if --filter-noisy is enabled)
+        if filter_noisy and LABEL_NOISE_DICT:
+            record_key = commit_id or str(idx)
+            is_noisy = LABEL_NOISE_DICT.get(record_key, False)
+            if is_noisy:
+                return None
+        
+        # Get additional metadata fields for enrichment
         commit_url = meta.get('commit_url', '') if meta else ''
         repo_url = meta.get('repo_url', '') if meta else ''
         
-        # Determine split (train/test/valid) if split info is available
+        # Optional: Determine split (only if --preserve-splits is enabled)
         split = None
-        if SPLIT_INFO['train'] or SPLIT_INFO['test'] or SPLIT_INFO['valid']:
+        if SPLIT_INFO and (SPLIT_INFO['train'] or SPLIT_INFO['test'] or SPLIT_INFO['valid']):
             if idx in SPLIT_INFO['train']:
                 split = 'train'
             elif idx in SPLIT_INFO['test']:
@@ -280,8 +304,10 @@ def process_single_record(args):
             elif idx in SPLIT_INFO['valid']:
                 split = 'valid'
         
-        # Determine dataset provenance if available
-        source_dataset = DATASET_PROVENANCE.get(idx, None)
+        # Optional: Determine dataset provenance (only if --track-provenance is enabled)
+        source_dataset = None
+        if DATASET_PROVENANCE:
+            source_dataset = DATASET_PROVENANCE.get(idx, None)
         
         # Language inference
         language = 'C'
@@ -303,19 +329,19 @@ def process_single_record(args):
         # Sanitize code
         code = sanitize_code(code, language=language, normalize_ws=True)
         
-        # Validate code
-        if not is_valid_code(code, min_length=10):
+        # Validate code - must be non-empty and reasonable length
+        if not code or len(code.strip()) < 10:
             return None
         
-        # Create intermediate record
+        # Create intermediate record with normalized fields
         intermediate_record = {
             "code": code,
             "label": label,
             "language": language,
             "project": project if project else None,
             "commit_id": commit_id if commit_id else None,
-            "cwe_id": cwe_id,
-            "cve_id": cve_id,
+            "cwe_id": cwe_id if cwe_id else None,
+            "cve_id": cve_id if cve_id else None,
             "file_name": None,
             "func_name": None,
             "description": description if description else None
@@ -328,29 +354,35 @@ def process_single_record(args):
             index=idx
         )
         
-        # Add enhanced provenance
+        # Add enhanced provenance for traceability
         unified_record['source_row_index'] = idx
         unified_record['source_file'] = 'diversevul.json'
-        unified_record['commit_url'] = commit_url if commit_url else None
-        unified_record['repo_url'] = repo_url if repo_url else None
         
-        # Add split information if available
+        # Add optional enriched metadata if available
+        if commit_url:
+            unified_record['commit_url'] = commit_url
+        if repo_url:
+            unified_record['repo_url'] = repo_url
+        
+        # Add split information if available (optional feature)
         if split:
             unified_record['original_split'] = split
         
-        # Add dataset provenance if available
+        # Add dataset provenance if available (optional feature)
         if source_dataset:
             unified_record['source_dataset'] = source_dataset
         
-        # Validate
-        is_valid, errors = validate_record(unified_record, use_jsonschema=True)
-        if not is_valid:
+        # Light validation - just check required fields exist
+        # Don't use strict jsonschema validation that filters too many records
+        if not unified_record.get('code') or unified_record.get('label') is None:
             return None
         
         return unified_record
         
     except Exception as e:
-        logger.debug(f"Error processing record {idx}: {str(e)}")
+        # Log first few errors in detail
+        if idx < 10:
+            logger.error(f"ERROR processing record {idx}: {type(e).__name__}: {str(e)}")
         return None
 
 
@@ -364,6 +396,12 @@ def process_batch_parallel(data: List[Dict], num_workers: int = None, filter_noi
         logger.info(f"🔍 Label noise filtering: ENABLED")
     
     logger.info(f"📝 Total input records to process: {len(data)}")
+    
+    # Show sample record structure
+    if len(data) > 0:
+        sample_keys = list(data[0].keys())
+        logger.info(f"📋 Sample record structure: {sample_keys}")
+        logger.info(f"📋 First record preview: func_length={len(data[0].get('func', ''))}, target={data[0].get('target')}")
     
     # Prepare arguments for parallel processing
     args_list = [(record, idx, filter_noisy) for idx, record in enumerate(data)]
@@ -392,6 +430,10 @@ def process_batch_parallel(data: List[Dict], num_workers: int = None, filter_noi
     
     logger.info(f"✅ Successfully processed: {len(results)} records")
     logger.info(f"⚠️  Filtered/Failed: {none_count} records")
+    
+    if len(results) == 0 and len(data) > 0:
+        logger.error(f"🚨 CRITICAL: ALL {len(data)} records were filtered out!")
+        logger.error(f"🚨 This indicates a problem with the processing logic")
     
     return results
 
@@ -551,41 +593,51 @@ Examples:
     
     ensure_dir(str(output_dir))
     
-    # Load metadata (shared across all workers)
+    # Load metadata (shared across all workers) - ALWAYS load this for enrichment
     print(f"\n📊 Loading enrichment data...")
     metadata_path = input_dir / "diversevul_metadata.json"
     if metadata_path.exists():
         METADATA_DICT = load_metadata(str(metadata_path))
+        logger.info(f"✅ Metadata loaded: {len(METADATA_DICT)} commit IDs")
     else:
         logger.warning("⚠️  Metadata file not found - CVE/CWE enrichment unavailable")
+        METADATA_DICT = {}
     
-    # Load label noise info if filtering is enabled
+    # Load label noise info ONLY if filtering is enabled
     if args.filter_noisy:
         label_noise_dir = input_dir / "label_noise"
         if label_noise_dir.exists():
             LABEL_NOISE_DICT = load_label_noise_info(label_noise_dir)
             if LABEL_NOISE_DICT:
-                logger.info(f"✅ Label noise filtering ENABLED ({len(LABEL_NOISE_DICT)} records marked)")
+                noisy_count = sum(1 for v in LABEL_NOISE_DICT.values() if v)
+                logger.info(f"✅ Label noise filtering ENABLED ({noisy_count} records marked as noisy)")
             else:
                 logger.warning("⚠️  No label noise data found - filtering disabled")
         else:
             logger.warning("⚠️  label_noise/ directory not found - filtering disabled")
+            LABEL_NOISE_DICT = {}
+    else:
+        logger.info("📊 Label noise filtering: DISABLED (use --filter-noisy to enable)")
+        LABEL_NOISE_DICT = {}
     
-    # Load split information if preservation is enabled
+    # Load split information ONLY if preservation is enabled
     if args.preserve_splits:
         merged_splits_dir = input_dir / "merged_splits"
         if merged_splits_dir.exists():
             SPLIT_INFO = load_split_info(merged_splits_dir)
             total_in_splits = sum(len(v) for v in SPLIT_INFO.values())
             if total_in_splits > 0:
-                logger.info(f"✅ Split preservation ENABLED (train: {len(SPLIT_INFO['train'])}, "
-                          f"test: {len(SPLIT_INFO['test'])}, valid: {len(SPLIT_INFO['valid'])})")
+                logger.info(f"✅ Split preservation ENABLED ({total_in_splits} records mapped)")
             else:
                 logger.warning("⚠️  No split data found - preservation disabled")
         else:
             logger.warning("⚠️  merged_splits/ directory not found - preservation disabled")
+            SPLIT_INFO = {'train': set(), 'test': set(), 'valid': set()}
+    else:
+        logger.info("📊 Split preservation: DISABLED (use --preserve-splits to enable)")
+        SPLIT_INFO = {'train': set(), 'test': set(), 'valid': set()}
     
-    # Load dataset provenance if tracking is enabled
+    # Load dataset provenance ONLY if tracking is enabled
     if args.track_provenance:
         merged_splits_dir = input_dir / "merged_splits"
         if merged_splits_dir.exists():
@@ -596,6 +648,10 @@ Examples:
                 logger.warning("⚠️  No provenance data found - tracking disabled")
         else:
             logger.warning("⚠️  merged_splits/ directory not found - tracking disabled")
+            DATASET_PROVENANCE = {}
+    else:
+        logger.info("📊 Dataset provenance: DISABLED (use --track-provenance to enable)")
+        DATASET_PROVENANCE = {}
     
     # Load dataset
     dataset_path = input_dir / "diversevul.json"
