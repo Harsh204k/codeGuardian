@@ -66,14 +66,14 @@ pytest>=7.0.0
 pytest-cov>=4.0.0
 
 # ================================
-# 🔹 Google Cloud & BigQuery (Fixed)
+# 🔹 Google Cloud & BigQuery (Fixed - Kaggle Compatible)
 # ================================
-protobuf==4.25.3
-google-api-core==2.15.0
-google-cloud-bigquery==3.17.1
-google-cloud-bigquery-storage==2.25.0
-grpcio==1.63.0
-grpcio-status==1.63.0
+protobuf>=4.23.0,<4.26.0
+google-api-core>=2.15.0,<3.0.0
+google-cloud-bigquery>=3.17.0,<3.18.0
+google-cloud-bigquery-storage>=2.25.0,<2.26.0
+grpcio>=1.63.0,<1.64.0
+grpcio-status>=1.63.0,<1.64.0
 
 # ================================
 # 🔹 Security & Encryption (pydrive2 compatibility)
