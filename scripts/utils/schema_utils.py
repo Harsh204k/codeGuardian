@@ -48,7 +48,10 @@ JSONSCHEMA_DEFINITION = {
         "project": {"type": ["string", "null"]},
         "commit_id": {"type": ["string", "null"]},
         "description": {"type": ["string", "null"]},
-        "source_dataset": {"type": "string"}
+        "source_dataset": {"type": "string"},
+        # Optional provenance fields for traceability
+        "source_row_index": {"type": "integer"},
+        "source_file": {"type": "string"}
     },
     "required": ["id", "language", "code", "label", "source_dataset"],
     "additionalProperties": False

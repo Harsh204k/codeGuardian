@@ -28,7 +28,7 @@ from scripts.utils.io_utils import read_csv, write_jsonl, write_json, ensure_dir
 from scripts.utils.text_cleaner import sanitize_code, is_valid_code
 from scripts.utils.schema_utils import (
     normalize_language, normalize_cwe_id, normalize_cve_id,
-    map_to_unified_schema, validate_record
+    map_to_unified_schema, validate_record, deduplicate_by_code_hash
 )
 from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
@@ -63,7 +63,7 @@ def process_language_file(csv_path: str, language: str, global_index_offset: int
         global_index_offset: Starting index for globally unique IDs
         
     Returns:
-        List of processed records
+        List of processed records with source_row_index for provenance
     """
     records = []
     csv_data = list(read_csv(csv_path))
@@ -153,6 +153,10 @@ def process_language_file(csv_path: str, language: str, global_index_offset: int
                 dataset_name="zenodo",
                 index=global_index_offset + idx
             )
+            
+            # Add source provenance for traceability
+            unified_record['source_row_index'] = idx
+            unified_record['source_file'] = Path(csv_path).name
             
             # Validate record
             is_valid, errors = validate_record(unified_record, use_jsonschema=True)
@@ -309,14 +313,9 @@ def main():
         
         all_records.extend(records)
     
-    # Remove duplicates based on code content
-    unique_codes = set()
-    unique_records = []
-    for record in all_records:
-        code_key = record['code'][:200]  # Use first 200 chars as key
-        if code_key not in unique_codes:
-            unique_codes.add(code_key)
-            unique_records.append(record)
+    # Deduplicate using full SHA-256 hash instead of prefix (more accurate)
+    logger.info(f"Deduplicating {len(all_records)} records using SHA-256 hash...")
+    unique_records = deduplicate_by_code_hash(all_records)
     
     logger.info(f"Removed {len(all_records) - len(unique_records)} duplicate records")
     all_records = unique_records
