@@ -540,9 +540,9 @@ def main():
     # Print environment info
     print_environment_info()
     
-    # Get paths
-    input_base = get_dataset_path('juliet', 'raw')
-    output_base = get_output_path('juliet', 'processed')
+    # Get paths (fixed for Kaggle compatibility)
+    input_base = get_dataset_path('juliet/raw')
+    output_base = get_output_path('juliet/processed')
     ensure_dir(output_base)
     
     logger.info(f"Input directory: {input_base}")
