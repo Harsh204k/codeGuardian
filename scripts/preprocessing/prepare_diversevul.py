@@ -327,11 +327,6 @@ def main():
     else:
         output_dir = get_output_path("diversevul/processed")
     
-    # Print paths for debugging
-    print(f"\n📂 INPUT PATH: {input_dir}")
-    print(f"📂 OUTPUT PATH: {output_dir}")
-    print(f"✓ Input directory exists: {input_dir.exists()}")
-    
     if not input_dir.exists():
         print(f"\n❌ ERROR: Input directory not found!")
         print(f"Expected path: {input_dir}")
@@ -341,17 +336,45 @@ def main():
         print(f"  3. Inside diversevul: diversevul.json, diversevul_metadata.json")
         return
     
+    # Check if files are in 'raw' subdirectory FIRST (before any other checks)
+    raw_dir = input_dir / "raw"
+    main_file_at_root = input_dir / "diversevul.json"
+    main_file_in_raw = raw_dir / "diversevul.json"
+    
+    print(f"\n🔍 Checking for dataset files...")
+    print(f"   raw/ subdirectory exists: {raw_dir.exists()}")
+    print(f"   diversevul.json at root: {main_file_at_root.exists()}")
+    print(f"   diversevul.json in raw/: {main_file_in_raw.exists()}")
+    
+    if raw_dir.exists() and not main_file_at_root.exists() and main_file_in_raw.exists():
+        print(f"\n✅ Files detected in 'raw' subdirectory!")
+        print(f"   Switching input directory to: {raw_dir}")
+        input_dir = raw_dir
+        logger.info(f"Using raw subdirectory: {raw_dir}")
+    elif main_file_at_root.exists():
+        print(f"\n✅ Files found at root level")
+        logger.info(f"Using root directory: {input_dir}")
+    else:
+        print(f"\n⚠️  Could not find diversevul.json in expected locations")
+    
+    # Print paths for debugging (AFTER potential adjustment)
+    print(f"\n📂 FINAL INPUT PATH: {input_dir}")
+    print(f"📂 OUTPUT PATH: {output_dir}")
+    
+    # List files at final input path for verification
+    if input_dir.exists():
+        print(f"\n📁 Files at final input path:")
+        for item in sorted(input_dir.iterdir()):
+            if item.is_file():
+                size_mb = item.stat().st_size / (1024 * 1024)
+                print(f"   📄 {item.name} ({size_mb:.1f} MB)")
+            else:
+                print(f"   📂 {item.name}/")
+    
     logger.info(f"[INFO] Processing DiverseVul dataset from: {input_dir}")
     
     # Ensure output directory exists
     ensure_dir(str(output_dir))
-    
-    # Check if files are in 'raw' subdirectory (common structure)
-    raw_dir = input_dir / "raw"
-    if raw_dir.exists() and not (input_dir / "diversevul.json").exists():
-        logger.info(f"📂 Found 'raw' subdirectory, using: {raw_dir}")
-        print(f"📂 Files detected in 'raw' subdirectory: {raw_dir}")
-        input_dir = raw_dir
     
     # Load metadata
     metadata_path = input_dir / "diversevul_metadata.json"
