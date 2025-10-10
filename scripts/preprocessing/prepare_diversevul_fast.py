@@ -54,6 +54,15 @@ SPLIT_INFO = {'train': set(), 'test': set(), 'valid': set()}
 DATASET_PROVENANCE = {}  # Maps idx -> source_dataset (bigvul, crossvul, etc.)
 
 
+def init_worker(metadata, noise, splits, provenance):
+    """Initialize worker process with shared data."""
+    global METADATA_DICT, LABEL_NOISE_DICT, SPLIT_INFO, DATASET_PROVENANCE
+    METADATA_DICT = metadata
+    LABEL_NOISE_DICT = noise
+    SPLIT_INFO = splits
+    DATASET_PROVENANCE = provenance
+
+
 def load_metadata(metadata_path: str) -> Dict[str, Any]:
     """Load metadata from diversevul_metadata.json (JSONL format)."""
     try:
@@ -341,6 +350,7 @@ def process_single_record(args):
         return unified_record
         
     except Exception as e:
+        logger.debug(f"Error processing record {idx}: {str(e)}")
         return None
 
 
@@ -353,12 +363,21 @@ def process_batch_parallel(data: List[Dict], num_workers: int = None, filter_noi
     if filter_noisy:
         logger.info(f"🔍 Label noise filtering: ENABLED")
     
+    logger.info(f"📝 Total input records to process: {len(data)}")
+    
     # Prepare arguments for parallel processing
     args_list = [(record, idx, filter_noisy) for idx, record in enumerate(data)]
     
     # Process in parallel with progress bar
     results = []
-    with Pool(processes=num_workers) as pool:
+    none_count = 0
+    
+    # Initialize worker processes with shared data
+    with Pool(
+        processes=num_workers,
+        initializer=init_worker,
+        initargs=(METADATA_DICT, LABEL_NOISE_DICT, SPLIT_INFO, DATASET_PROVENANCE)
+    ) as pool:
         # Use imap_unordered for better performance with progress bar
         for result in tqdm(
             pool.imap_unordered(process_single_record, args_list, chunksize=100),
@@ -368,6 +387,11 @@ def process_batch_parallel(data: List[Dict], num_workers: int = None, filter_noi
         ):
             if result is not None:
                 results.append(result)
+            else:
+                none_count += 1
+    
+    logger.info(f"✅ Successfully processed: {len(results)} records")
+    logger.info(f"⚠️  Filtered/Failed: {none_count} records")
     
     return results
 
@@ -582,6 +606,14 @@ Examples:
     logger.info(f"\n📖 Loading dataset from {dataset_path}")
     data = list(read_jsonl(str(dataset_path), max_records=args.max_records))
     logger.info(f"✅ Loaded {len(data)} records")
+    
+    if len(data) == 0:
+        logger.error(f"❌ No data loaded from {dataset_path}! File might be empty or corrupted.")
+        logger.info(f"🔍 Checking file size: {dataset_path.stat().st_size} bytes")
+        return
+    
+    # Show sample of first record for debugging
+    logger.info(f"📋 Sample record keys: {list(data[0].keys())}")
     
     # Process in parallel
     logger.info(f"\n🚀 Starting parallel processing...")
