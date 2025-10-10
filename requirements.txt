@@ -1,25 +1,24 @@
 # ============================================================================
-# CodeGuardian Dependencies - Kaggle Optimized
+# CodeGuardian Dependencies - Kaggle Optimized (Conflict-Resolved)
 # ============================================================================
-# This requirements.txt is optimized for Kaggle environment to avoid conflicts
-# Most packages are already installed on Kaggle - we only install missing ones
+# This requirements.txt resolves all major dependency conflicts for Kaggle
+# Version constraints are carefully chosen for maximum compatibility
 # ============================================================================
 
 ###############################
 # Core Dependencies (Minimal)
 ###############################
-# Most of these are pre-installed on Kaggle, but we specify them for local dev
 pyyaml>=6.0
 regex>=2023.0.0
 openpyxl>=3.1.0
-rich>=12.4.4,<14.0.0      # Pin to avoid bigframes conflict
+rich>=12.4.4,<14.0.0      # Pin to <14 for bigframes compatibility
 requests>=2.31.0
 click>=8.0.0
 tqdm>=4.64.0
 jsonschema>=4.17.0
 
 ###############################
-# Web Frameworks (Optional - Not needed for preprocessing)
+# Web Frameworks (Optional)
 ###############################
 # Commented out to reduce installation time and conflicts
 # Uncomment if you need Django/Flask for web interface
@@ -29,10 +28,13 @@ jsonschema>=4.17.0
 ###############################
 # Machine Learning & Data Science
 ###############################
-# Use compatible versions with Kaggle's pre-installed packages
-numpy>=1.26.0,<2.0.0      # Keep 1.x for compatibility
+# CRITICAL: numpy version affects multiple packages
+# - cesium needs >=2.0, but many Kaggle packages need <2.0
+# - Using <2.0 for broader compatibility (cesium is optional)
+numpy>=1.26.0,<2.0.0      # Keep 1.x for TensorFlow/cuDF compatibility
 pandas>=2.2.0,<2.3.0
-scikit-learn>=1.5.0,<1.6.0  # Pin to avoid category-encoders conflict
+# FIXED: umap-learn requires scikit-learn>=1.6
+scikit-learn>=1.6.0       # Upgraded to satisfy umap-learn
 xgboost>=1.7.0
 joblib>=1.3.0
 
@@ -45,19 +47,17 @@ pyarrow>=19.0.0,<20.0.0   # Critical: cudf needs <20, datasets needs >=19
 ###############################
 # Deep Learning & Transformers
 ###############################
-# These are mostly pre-installed on Kaggle, install only if missing
 torch>=2.0.0
 transformers>=4.40.0
 tokenizers>=0.19.0
 datasets>=2.19.0
 accelerate>=0.30.0
 huggingface_hub>=0.23.0
-# hf_xet>=0.4.0  # Commented out - only needed if using Xet storage
 
 ###############################
 # Monitoring & Logging
 ###############################
-tensorboard>=2.18.0,<2.19.0  # Pin to avoid tensorflow conflict
+tensorboard>=2.18.0,<2.19.0
 loguru>=0.7.0
 memory_profiler>=0.61.0
 
@@ -73,14 +73,43 @@ pytest>=7.0.0
 pytest-cov>=4.0.0
 
 ###############################
-# Kaggle-Specific: RAPIDS/cuDF compatibility
+# Google Cloud & BigQuery
 ###############################
-# Ensure BigQuery-related packages match bigframes expectations
+# CRITICAL: Protobuf version must satisfy multiple packages
+# - TensorFlow needs: >=3.20.3,<6.0.0
+# - google-cloud-translate needs: >=3.19.5,<5.0.0
+# - google-ai-generativelanguage needs: >=3.20.2,<6.0.0
+# Using <5.0.0 as the safest common range
+protobuf>=3.20.3,<5.0.0   # FIXED: Downgrade from 6.x to <5.0 for TF/GCP
+
+# CONFLICT WARNING: google-cloud-automl requires google-api-core<2.0
+# but bigquery-storage requires >=2.10.2
+# RESOLUTION: Prioritize bigquery-storage (needed), exclude automl if installed
+google-api-core>=2.10.2,<3.0.0
 google-cloud-bigquery>=3.31.0
 google-cloud-bigquery-storage>=2.30.0,<3.0.0
-google-api-core>=2.10.2,<3.0.0
 
-# Force cudf-polars to match cudf version (pre-installed on Kaggle)
-# Uncomment if you see cudf-polars version mismatch errors:
-# cudf-polars-cu12==25.2.2
-# polars>=1.20,<1.22
+###############################
+# Security & Encryption (for pydrive2 compatibility)
+###############################
+# FIXED: pydrive2 has strict version requirements
+cryptography>=40.0.0,<44.0.0    # pydrive2 needs <44
+pyOpenSSL>=19.1.0,<=24.2.1      # pydrive2 needs <=24.2.1
+
+###############################
+# Pydantic (for gradio compatibility)
+###############################
+# FIXED: gradio requires pydantic <2.12
+pydantic>=2.0,<2.12
+
+###############################
+# RAPIDS/cuDF compatibility (Kaggle pre-installed)
+###############################
+# NOTE: RAPIDS library version conflicts (libraft, pylibraft, rmm)
+# These are pre-installed on Kaggle at version 25.2.x
+# If you see version 25.6.x conflicts, force downgrade:
+# libraft-cu12==25.2.0
+# pylibraft-cu12==25.2.0
+# rmm-cu12==25.2.0
+# libcugraph-cu12==25.2.2
+# pylibcugraph-cu12==25.2.2
