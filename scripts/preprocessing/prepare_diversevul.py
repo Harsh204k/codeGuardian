@@ -308,6 +308,14 @@ def main():
     # Print environment info
     print_environment_info()
     
+    # Debug: List available datasets on Kaggle
+    if Path("/kaggle/input").exists():
+        print(f"📦 Available Kaggle input datasets:")
+        for dataset_dir in Path("/kaggle/input").iterdir():
+            if dataset_dir.is_dir():
+                print(f"  - {dataset_dir.name}")
+        print()
+    
     # Get paths using Kaggle-compatible helper
     if args.input_dir:
         input_dir = Path(args.input_dir).resolve()
@@ -319,6 +327,20 @@ def main():
     else:
         output_dir = get_output_path("diversevul/processed")
     
+    # Print paths for debugging
+    print(f"\n📂 INPUT PATH: {input_dir}")
+    print(f"📂 OUTPUT PATH: {output_dir}")
+    print(f"✓ Input directory exists: {input_dir.exists()}")
+    
+    if not input_dir.exists():
+        print(f"\n❌ ERROR: Input directory not found!")
+        print(f"Expected path: {input_dir}")
+        print(f"\nOn Kaggle, make sure you have:")
+        print(f"  1. Added 'codeguardian-datasets' as input dataset")
+        print(f"  2. The dataset contains a 'diversevul' folder")
+        print(f"  3. Inside diversevul: diversevul.json, diversevul_metadata.json")
+        return
+    
     logger.info(f"[INFO] Processing DiverseVul dataset from: {input_dir}")
     
     # Ensure output directory exists
@@ -326,17 +348,27 @@ def main():
     
     # Load metadata
     metadata_path = input_dir / "diversevul_metadata.json"
+    print(f"\n🔍 Looking for metadata: {metadata_path}")
+    print(f"✓ Metadata exists: {metadata_path.exists()}")
     metadata = load_metadata(str(metadata_path)) if metadata_path.exists() else {}
     
     # Load label noise info
     label_noise_dir = input_dir / "label_noise"
+    print(f"🔍 Looking for label noise: {label_noise_dir}")
+    print(f"✓ Label noise dir exists: {label_noise_dir.exists()}")
     label_noise = load_label_noise_info(label_noise_dir)
     
     # Process main dataset
     dataset_path = input_dir / "diversevul.json"
+    print(f"\n🔍 Looking for main dataset: {dataset_path}")
+    print(f"✓ Dataset file exists: {dataset_path.exists()}")
     
     if not dataset_path.exists():
-        logger.error(f"Dataset file not found: {dataset_path}")
+        logger.error(f"❌ Dataset file not found: {dataset_path}")
+        print(f"\n📁 Contents of {input_dir}:")
+        if input_dir.exists():
+            for item in input_dir.iterdir():
+                print(f"  - {item.name} ({'dir' if item.is_dir() else 'file'})")
         return
     
     all_records = []
