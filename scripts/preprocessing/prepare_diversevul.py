@@ -346,6 +346,13 @@ def main():
     # Ensure output directory exists
     ensure_dir(str(output_dir))
     
+    # Check if files are in 'raw' subdirectory (common structure)
+    raw_dir = input_dir / "raw"
+    if raw_dir.exists() and not (input_dir / "diversevul.json").exists():
+        logger.info(f"📂 Found 'raw' subdirectory, using: {raw_dir}")
+        print(f"📂 Files detected in 'raw' subdirectory: {raw_dir}")
+        input_dir = raw_dir
+    
     # Load metadata
     metadata_path = input_dir / "diversevul_metadata.json"
     print(f"\n🔍 Looking for metadata: {metadata_path}")

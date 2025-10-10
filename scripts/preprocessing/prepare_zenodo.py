@@ -285,6 +285,15 @@ def main():
     # Ensure output directory exists
     ensure_dir(str(output_dir))
     
+    # Check if files are in 'raw' subdirectory (common structure)
+    raw_dir = input_dir / "raw"
+    if raw_dir.exists():
+        # Check if CSV files are in raw/ directory
+        sample_file = raw_dir / "data_C.csv"
+        if sample_file.exists():
+            logger.info(f"📂 Found CSV files in 'raw' subdirectory, using: {raw_dir}")
+            input_dir = raw_dir
+    
     # Determine which languages to process
     languages_to_process = args.languages if args.languages else list(LANGUAGE_FILES.keys())
     
