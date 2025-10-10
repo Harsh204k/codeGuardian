@@ -25,7 +25,7 @@ from scripts.utils.io_utils import read_json, read_jsonl, write_jsonl, write_jso
 from scripts.utils.text_cleaner import sanitize_code, is_valid_code
 from scripts.utils.schema_utils import (
     normalize_language, normalize_cwe_id, normalize_cve_id,
-    map_to_unified_schema, validate_record, infer_language_from_filename
+    map_to_unified_schema, validate_record, infer_language_from_filename, deduplicate_by_code_hash
 )
 from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
@@ -39,28 +39,24 @@ logger = logging.getLogger(__name__)
 
 def load_metadata(metadata_path: str) -> Dict[str, Any]:
     """
-    Load metadata from diversevul_metadata.json.
+    Load metadata from diversevul_metadata.json (JSONL format).
     
     Args:
-        metadata_path: Path to metadata JSON file
+        metadata_path: Path to metadata JSONL file
         
     Returns:
-        Dictionary mapping record IDs to metadata
+        Dictionary mapping commit_ids to metadata
     """
     try:
-        metadata = read_json(metadata_path)
-        logger.info(f"Loaded metadata for {len(metadata)} records")
+        metadata_dict = {}
+        # Metadata is in JSONL format (one JSON per line)
+        for record in read_jsonl(metadata_path):
+            commit_id = record.get('commit_id', '')
+            if commit_id:
+                metadata_dict[commit_id] = record
         
-        # Convert to dict if it's a list
-        if isinstance(metadata, list):
-            metadata_dict = {}
-            for item in metadata:
-                record_id = item.get('id', item.get('record_id', item.get('CVE_ID', '')))
-                if record_id:
-                    metadata_dict[str(record_id)] = item
-            return metadata_dict
-        
-        return metadata
+        logger.info(f"Loaded metadata for {len(metadata_dict)} records")
+        return metadata_dict
     except Exception as e:
         logger.warning(f"Could not load metadata: {e}")
         return {}
@@ -123,7 +119,7 @@ def process_diversevul_record(
     
     Args:
         record: Raw record from diversevul.json
-        metadata: Metadata dictionary
+        metadata: Metadata dictionary (keyed by commit_id)
         label_noise: Label noise dictionary
         index: Record index for unique ID generation
         
@@ -131,42 +127,53 @@ def process_diversevul_record(
         Processed record or None if invalid
     """
     try:
-        # Extract fields (field names may vary)
-        record_id = record.get('id', record.get('record_id', record.get('CVE_ID', '')))
+        # Extract fields - DiverseVul actual structure:
+        # Main dataset: func, target, cwe (list), project, commit_id, hash, size, message
         code = record.get('func', record.get('code', record.get('source_code', '')))
         label = record.get('target', record.get('label', record.get('vulnerable', 0)))
-        language = record.get('language', record.get('lang', 'unknown'))
-        cwe_id = record.get('CWE_ID', record.get('cwe_id', record.get('CWE', '')))
-        cve_id = record.get('CVE_ID', record.get('cve_id', record.get('CVE', '')))
-        project = record.get('project', record.get('repo', ''))
-        file_name = record.get('file', record.get('filename', ''))
-        commit_id = record.get('commit_id', record.get('commit', ''))
-        func_name = record.get('func_name', record.get('function', record.get('method', '')))
-        description = record.get('description', record.get('desc', ''))
+        commit_id = record.get('commit_id', '')
+        project = record.get('project', '')
+        
+        # CWE is a LIST in DiverseVul, take first one if available
+        cwe_list = record.get('cwe', [])
+        cwe_id = cwe_list[0] if isinstance(cwe_list, list) and len(cwe_list) > 0 else ''
+        
+        # Get metadata if available (keyed by commit_id)
+        meta = metadata.get(commit_id, {})
+        
+        # CVE from metadata (field is 'CVE' not 'CVE_ID')
+        cve_id = meta.get('CVE', '') if meta else ''
+        
+        # Get additional info from metadata
+        if not cwe_id and 'CWE' in meta:
+            cwe_id = meta['CWE']
+        description = meta.get('bug_info', '') if meta else record.get('message', '')
+        
+        # Language inference - DiverseVul doesn't have language field in main dataset
+        # Infer from project name or set based on common patterns
+        language = 'C'  # Most projects are C/C++
+        if project:
+            project_lower = project.lower()
+            if any(x in project_lower for x in ['java', 'jdk', 'tomcat', 'spring']):
+                language = 'Java'
+            elif any(x in project_lower for x in ['node', 'javascript', 'js', 'npm']):
+                language = 'JavaScript'
+            elif any(x in project_lower for x in ['python', 'py', 'django', 'flask']):
+                language = 'Python'
+            elif any(x in project_lower for x in ['php']):
+                language = 'PHP'
+            elif any(x in project_lower for x in ['go', 'golang']):
+                language = 'Go'
+            elif any(x in project_lower for x in ['ruby', 'rails']):
+                language = 'Ruby'
         
         # Check if record has label noise
-        is_noisy = label_noise.get(str(record_id), False)
+        record_key = commit_id or str(index)
+        is_noisy = label_noise.get(record_key, False)
         
-        # Skip noisy records if filtering is desired
-        # (optional - could be a command line flag)
+        # Skip noisy records if filtering is desired (optional)
         # if is_noisy:
         #     return None
-        
-        # Get additional metadata if available
-        meta = metadata.get(str(record_id), {})
-        if not project and 'project' in meta:
-            project = meta['project']
-        if not cwe_id and 'CWE_ID' in meta:
-            cwe_id = meta['CWE_ID']
-        if not description and 'description' in meta:
-            description = meta['description']
-        
-        # Infer language from filename if language is unknown
-        if not language or language.lower() == 'unknown':
-            if file_name:
-                inferred_lang = infer_language_from_filename(file_name)
-                if inferred_lang:
-                    language = inferred_lang
         
         # Sanitize code
         code = sanitize_code(code, language=language, normalize_ws=True)
@@ -184,8 +191,8 @@ def process_diversevul_record(
             "commit_id": commit_id if commit_id else None,
             "cwe_id": cwe_id,
             "cve_id": cve_id,
-            "file_name": file_name if file_name else None,
-            "func_name": func_name if func_name else None,
+            "file_name": None,  # Not in DiverseVul
+            "func_name": None,  # Not in DiverseVul
             "description": description if description else None
         }
         
@@ -195,6 +202,10 @@ def process_diversevul_record(
             dataset_name="diversevul",
             index=index
         )
+        
+        # Add source provenance for traceability
+        unified_record['source_row_index'] = index
+        unified_record['source_file'] = 'diversevul.json'
         
         # Validate record
         is_valid, errors = validate_record(unified_record, use_jsonschema=True)
@@ -360,14 +371,9 @@ def main():
     
     logger.info(f"Extracted {len(all_records)} valid records")
     
-    # Remove duplicates based on code content
-    unique_codes = set()
-    unique_records = []
-    for record in all_records:
-        code_key = record['code'][:200]  # Use first 200 chars as key
-        if code_key not in unique_codes:
-            unique_codes.add(code_key)
-            unique_records.append(record)
+    # Deduplicate using full SHA-256 hash instead of prefix (more accurate)
+    logger.info(f"Deduplicating {len(all_records)} records using SHA-256 hash...")
+    unique_records = deduplicate_by_code_hash(all_records)
     
     logger.info(f"Removed {len(all_records) - len(unique_records)} duplicate records")
     all_records = unique_records

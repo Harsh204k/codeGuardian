@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from scripts.utils.io_utils import read_csv, read_json, write_jsonl, write_json, ensure_dir, ProgressWriter
 from scripts.utils.text_cleaner import sanitize_code, is_valid_code
-from scripts.utils.schema_utils import map_to_unified_schema, validate_record, normalize_language
+from scripts.utils.schema_utils import map_to_unified_schema, validate_record, normalize_language, deduplicate_by_code_hash
 from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_environment_info
 
 # Setup logging
@@ -86,6 +86,10 @@ def process_csv_file(csv_path: str, project_name: str) -> List[Dict[str, Any]]:
                 dataset_name="devign",
                 index=idx
             )
+            
+            # Add source provenance for traceability
+            unified_record['source_row_index'] = idx
+            unified_record['source_file'] = Path(csv_path).name
             
             # Validate record
             is_valid, errors = validate_record(unified_record, use_jsonschema=True)
@@ -158,6 +162,10 @@ def process_function_json(json_path: str) -> List[Dict[str, Any]]:
                     dataset_name="devign",
                     index=idx
                 )
+                
+                # Add source provenance for traceability
+                unified_record['source_row_index'] = idx
+                unified_record['source_file'] = Path(json_path).name
                 
                 # Validate record
                 is_valid, errors = validate_record(unified_record, use_jsonschema=True)
@@ -291,14 +299,9 @@ def main():
         logger.info(f"Limiting to {args.max_records} records")
         all_records = all_records[:args.max_records]
     
-    # Remove duplicates based on code content
-    unique_codes = set()
-    unique_records = []
-    for record in all_records:
-        code_key = record['code']
-        if code_key not in unique_codes:
-            unique_codes.add(code_key)
-            unique_records.append(record)
+    # Deduplicate using full SHA-256 hash instead of prefix (more accurate)
+    logger.info(f"Deduplicating {len(all_records)} records using SHA-256 hash...")
+    unique_records = deduplicate_by_code_hash(all_records)
     
     logger.info(f"Removed {len(all_records) - len(unique_records)} duplicate records")
     all_records = unique_records
