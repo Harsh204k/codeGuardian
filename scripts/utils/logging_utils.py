@@ -31,13 +31,13 @@ import cProfile
 import pstats
 import io
 from pathlib import Path
-from typing import Callable, Any, Dict
+from typing import Callable, Any, Dict, Union
 from datetime import datetime
 import sys
 
 # Try to import loguru (structured logging)
 try:
-    from loguru import logger as loguru_logger
+    from loguru import logger as loguru_logger  # type: ignore
     HAS_LOGURU = True
 except ImportError:
     HAS_LOGURU = False
@@ -46,7 +46,7 @@ except ImportError:
 
 # Try to import memory_profiler
 try:
-    from memory_profiler import profile as memory_profile_decorator
+    from memory_profiler import profile as memory_profile_decorator  # type: ignore
     HAS_MEMORY_PROFILER = True
 except ImportError:
     HAS_MEMORY_PROFILER = False
@@ -84,10 +84,10 @@ def setup_logging(
     
     if HAS_LOGURU:
         # Remove default handler
-        loguru_logger.remove()
+        loguru_logger.remove()  # type: ignore
         
         # Add console handler with colors
-        loguru_logger.add(
+        loguru_logger.add(  # type: ignore
             sys.stderr,
             format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
             level=log_level,
@@ -98,7 +98,7 @@ def setup_logging(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = _LOG_DIR / f"phase2_run_{timestamp}.log"
         
-        loguru_logger.add(
+        loguru_logger.add(  # type: ignore
             str(log_file),
             format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
             level=log_level,
@@ -132,7 +132,7 @@ def get_logger(name: str):
     """
     if name not in _LOGGERS:
         if HAS_LOGURU:
-            _LOGGERS[name] = loguru_logger.bind(name=name)
+            _LOGGERS[name] = loguru_logger.bind(name=name)  # type: ignore
         else:
             _LOGGERS[name] = logging.getLogger(name)
     
@@ -401,7 +401,7 @@ class DatasetLogger:
 
 def generate_performance_report(
     timing_data: Dict[str, Dict[str, Any]],
-    output_path: str = "logs/profiling/performance_report.md"
+    output_path: Union[str, Path] = "logs/profiling/performance_report.md"
 ):
     """
     Generate a comprehensive performance report.
@@ -410,7 +410,8 @@ def generate_performance_report(
         timing_data: Dictionary of function names to timing stats
         output_path: Output markdown file path
     """
-    output_path = Path(output_path)
+    if isinstance(output_path, str):
+        output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     with open(output_path, 'w') as f:

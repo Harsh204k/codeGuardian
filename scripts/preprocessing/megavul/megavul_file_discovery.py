@@ -31,10 +31,11 @@ logger = logging.getLogger(__name__)
 
 def discover_megavul_files(
     base_dir: Path,
-    target_languages: List[str] = None
+    target_languages: List[str] = None,
+    max_files: int = None
 ) -> List[Tuple[Path, int]]:
     """
-    Discover ALL JSON files in the deeply nested MegaVul structure.
+    Discover JSON files in the deeply nested MegaVul structure.
     
     Returns list of (file_path, label) tuples where:
     - label = 1 if in 'vul/' directory
@@ -43,6 +44,7 @@ def discover_megavul_files(
     Args:
         base_dir: Root directory (e.g., /kaggle/input/codeguardian-datasets/megavul or megavul/raw)
         target_languages: Filter languages (e.g., ['C', 'C++', 'Java'])
+        max_files: Maximum number of files to discover (for testing, None = all files)
         
     Returns:
         List of (file_path, label) tuples
@@ -131,6 +133,19 @@ def discover_megavul_files(
                     continue
                 
                 files_with_labels.append((json_file, label))
+                
+                # Check if we've reached the max_files limit
+                if max_files and len(files_with_labels) >= max_files:
+                    logger.info(f"   ⏹️  Reached max_files limit ({max_files}), stopping discovery")
+                    break
+            
+            # Check again after processing all files in this language directory
+            if max_files and len(files_with_labels) >= max_files:
+                break
+        
+        # Check after processing all language directories in this date
+        if max_files and len(files_with_labels) >= max_files:
+            break
     
     # Print statistics
     logger.info(f"\n📊 File Discovery Statistics:")
