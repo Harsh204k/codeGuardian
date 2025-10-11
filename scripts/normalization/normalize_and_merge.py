@@ -447,7 +447,26 @@ def generate_unified_stats(all_records: List[Dict[str, Any]]) -> Dict[str, Any]:
         Statistics dictionary
     """
     # Use schema_utils for consistent stats
-    return get_schema_stats(all_records)
+    base_stats = get_schema_stats(all_records)
+
+    # Add additional computed statistics expected by the reporting functions
+    vulnerable_records = sum(1 for r in all_records if r.get("is_vulnerable") == 1)
+    non_vulnerable_records = len(all_records) - vulnerable_records
+
+    # Count unique languages and CWEs
+    unique_languages = len(set(r.get("language", "unknown") for r in all_records))
+    unique_cwes = len(set(r.get("cwe_id") for r in all_records if r.get("cwe_id")))
+
+    # Merge with base stats
+    unified_stats = {
+        **base_stats,
+        "vulnerable_records": vulnerable_records,
+        "non_vulnerable_records": non_vulnerable_records,
+        "unique_languages": unique_languages,
+        "unique_cwes": unique_cwes,
+    }
+
+    return unified_stats
 
 
 def print_summary_table(
