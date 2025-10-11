@@ -1,0 +1,103 @@
+# ============================================================================
+# MegaVul Preprocessing Configuration
+# ============================================================================
+# Optimized for Kaggle Free Tier (20GB disk limit)
+# Google Drive used for persistent storage of processed chunks
+
+# Input/Output Directories
+# ----------------------------------------------------------------------------
+raw_dataset_dir: "/kaggle/input/megavul/"
+output_dir: "/kaggle/working/megavul_processed/"
+drive_mount_dir: "/content/drive/MyDrive/codeGuardian/MegaVulProcessed/"
+
+# Chunking Strategy
+# ----------------------------------------------------------------------------
+# Process dataset in 1-2GB chunks to stay within Kaggle's 20GB limit
+chunk_size_gb: 1.5                    # Size per chunk in GB
+chunk_size_records: 50000             # Alternative: records per chunk
+records_per_file: 10000               # Records per output JSONL file
+
+# Google Drive Configuration
+# ----------------------------------------------------------------------------
+drive_enabled: true                   # Enable Drive sync
+delete_after_upload: true             # Delete local chunks after upload
+verify_checksum: true                 # Verify SHA-256 before deletion
+max_retries: 3                        # Upload retry attempts
+retry_delay_seconds: 5                # Delay between retries
+
+# Processing Configuration
+# ----------------------------------------------------------------------------
+schema_validation: true               # Enable strict schema validation
+normalize_whitespace: true            # Clean code whitespace
+deduplicate: true                     # Remove duplicates by code hash
+parallel_workers: 4                   # CPU cores for local processing
+
+# Resume Configuration
+# ----------------------------------------------------------------------------
+resume_tracker_file: "resume_tracker.json"
+checkpoint_interval: 5000             # Save progress every N records
+
+# Output Formats
+# ----------------------------------------------------------------------------
+output_format: "jsonl"                # jsonl, parquet, or both
+compression: "gzip"                   # none, gzip, bz2 (for jsonl)
+
+# Post-Processing Configuration
+# ----------------------------------------------------------------------------
+merge_output_path: "/content/drive/MyDrive/codeGuardian/MegaVulProcessed/merged_dataset.jsonl"
+merge_batch_size: 100000              # Records to merge at once
+generate_parquet: true                # Also create Parquet version
+parquet_row_group_size: 50000         # Parquet optimization
+
+# Metadata Enrichment
+# ----------------------------------------------------------------------------
+enrich_metadata: true                 # Add CWE/CVE/repo metadata
+cwe_mapping_file: "../../utils/cwe_mapper.py"
+metadata_sources:
+  - nvd_cve                           # NVD CVE database
+  - cwe_categories                    # CWE hierarchy
+  - repo_metadata                     # GitHub repo info
+
+# Logging Configuration
+# ----------------------------------------------------------------------------
+log_level: "INFO"                     # DEBUG, INFO, WARNING, ERROR
+log_file: "megavul_preprocessing.log"
+detailed_logging: true                # Log every chunk operation
+
+# Dataset-Specific Settings
+# ----------------------------------------------------------------------------
+# MegaVul dataset structure:
+#   - 2023-11/c_cpp/ (8.99 GB, 4 files)
+#   - 2024-04/c_cpp/ (9.2 GB, 4 files)
+#   - 2024-04/java/ (811 MB, 4 files)
+
+dataset_files:
+  - "2023-11/c_cpp/*.json"
+  - "2024-04/c_cpp/*.json"
+  - "2024-04/java/*.json"
+
+# Language filtering (null = process all)
+target_languages: null                # ["C", "C++", "Java"] or null
+
+# Schema Definition (17-field unified schema)
+# ----------------------------------------------------------------------------
+required_fields:
+  - id                                # UUID
+  - code                              # Source code
+  - is_vulnerable                     # Binary label
+  - language                          # Programming language
+  - dataset                           # Source dataset name
+
+optional_fields:
+  - cwe_id                            # CWE identifier
+  - cve_id                            # CVE identifier
+  - description                       # Vulnerability description
+  - attack_type                       # Attack category
+  - severity                          # Severity level
+  - review_status                     # Quality review
+  - func_name                         # Function name
+  - file_name                         # Source file
+  - project                           # Repository name
+  - commit_id                         # Git commit hash
+  - source_file                       # Original file path
+  - source_row_index                  # Row index in source

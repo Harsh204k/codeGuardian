@@ -1,0 +1,18 @@
+{
+  "completed_chunks": [],
+  "last_updated": null,
+  "total_records_processed": 0,
+  "session_id": "megavul_initial",
+  "status": "not_started",
+  "metadata": {
+    "created": "2025-10-11T00:00:00Z",
+    "dataset": "megavul",
+    "version": "1.0"
+  },
+  "notes": [
+    "This file tracks preprocessing progress for MegaVul dataset",
+    "completed_chunks: List of successfully processed chunk IDs",
+    "status: not_started | in_progress | completed | failed",
+    "To resume processing, run: python prepare_megavul_chunked.py --resume"
+  ]
+}
