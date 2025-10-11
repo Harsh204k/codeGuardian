@@ -155,3 +155,4 @@ tools/js/*
 tools/spotbugs/*
 !tests/
 !src/static/*
+!scripts/preprocessing/megavul/*
