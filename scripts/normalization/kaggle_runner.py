@@ -43,7 +43,7 @@ def check_dependencies():
 def check_project_structure():
     """Check if the project structure is correct."""
     required_files = [
-        "scripts/normalization/normalize_and_merge.py",
+        "normalize_and_merge.py",
         "scripts/utils/schema_utils.py",
         "scripts/utils/io_utils.py"
     ]
