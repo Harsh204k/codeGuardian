@@ -39,19 +39,19 @@ PERFORMANCE OPTIMIZATIONS FOR KAGGLE:
 
 CLI USAGE:
     # Full normalization + merge (all datasets)
-    python normalize_and_merge_v3.py --datasets devign zenodo diversevul --validate --summary
+    python normalize_and_merge.py --datasets devign zenodo diversevul --validate --summary
 
     # Quick test (100 records per dataset)
-    python normalize_and_merge_v3.py --quick-test --summary
+    python normalize_and_merge.py --quick-test --summary
 
     # Merge with deduplication
-    python normalize_and_merge_v3.py --datasets devign zenodo --deduplicate --summary
+    python normalize_and_merge.py --datasets devign zenodo --deduplicate --summary
 
     # Skip deduplication
-    python normalize_and_merge_v3.py --no-dedup --summary
+    python normalize_and_merge.py --no-dedup --summary
 
     # Custom output path
-    python normalize_and_merge_v3.py --output merged_output.jsonl --summary
+    python normalize_and_merge.py --output merged_output.jsonl --summary
 
 Author: CodeGuardian Team
 Version: 3.0.0 - Kaggle-Optimized + Schema-Utils Integration
@@ -143,6 +143,76 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
+
+# Check if we're on Windows and emojis might cause issues
+IS_WINDOWS = os.name == 'nt' or sys.platform.startswith('win')
+EMOJI_SAFE = not IS_WINDOWS
+
+def safe_print(text):
+    """Print text safely, removing emojis on Windows if needed."""
+    if not EMOJI_SAFE:
+        # Remove common emojis that cause issues
+        emoji_map = {
+            '🚀': '[START]',
+            '✅': '[OK]',
+            '❌': '[ERROR]',
+            '⚠️': '[WARN]',
+            '📁': '[DIR]',
+            '💾': '[SAVE]',
+            '🗂️': '[CACHE]',
+            '🎯': '[TARGET]',
+            '🔄': '[SYNC]',
+            '⚡': '[FAST]',
+            '📝': '[NOTE]',
+            '🔗': '[LINK]',
+            '📊': '[STATS]',
+            '🛡️': '[SECURE]',
+            '🌐': '[WEB]',
+            '📄': '[DOC]',
+            '🗑️': '[DELETE]',
+            '═': '=',
+            '┏': '+',
+            '┃': '|',
+            '┡': '+',
+            '│': '|',
+            '└': '+',
+            '┴': '+',
+            '┌': '+',
+            '┬': '+',
+            '├': '+',
+            '┼': '+',
+            '┤': '+',
+            '┘': '+',
+            '┶': '+',
+            '┷': '+',
+            '┸': '+',
+            '┹': '+',
+            '┺': '+',
+            '┻': '+',
+            '┼': '+',
+            '┽': '+',
+            '┾': '+',
+            '┿': '+',
+            '╀': '+',
+            '╁': '+',
+            '╂': '+',
+            '╃': '+',
+            '╄': '+',
+            '╅': '+',
+            '╆': '+',
+            '╇': '+',
+            '╈': '+',
+            '╉': '+',
+            '╊': '+',
+            '╋': '+',
+            '╌': '-',
+            '╍': '=',
+            '╎': '|',
+            '╏': '|',
+        }
+        for emoji, replacement in emoji_map.items():
+            text = text.replace(emoji, replacement)
+    print(text)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -636,7 +706,7 @@ def generate_markdown_report(
 def main():
     """Main pipeline entry point."""
     parser = argparse.ArgumentParser(
-        description="🚀 CodeGuardian v3.0 - Kaggle-Optimized Normalization & Merging Pipeline",
+        description="CodeGuardian v3.0 - Kaggle-Optimized Normalization & Merging Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -712,11 +782,20 @@ Examples:
     args = parser.parse_args()
 
     # Print header
-    print("\n" + "═" * 80)
-    print("🚀 CodeGuardian v3.0 - Normalization & Merging Pipeline")
-    print("   Kaggle-Optimized + Full schema_utils.py Integration")
-    print("═" * 80)
-    print_environment_info()
+    safe_print("\n" + "=" * 80)
+    safe_print("CodeGuardian v3.0 - Normalization & Merging Pipeline")
+    safe_print("   Kaggle-Optimized + Full schema_utils.py Integration")
+    safe_print("=" * 80)
+
+    # Detect environment and print info
+    try:
+        print_environment_info()
+    except Exception as e:
+        safe_print(f"WARN: Could not detect environment info: {e}")
+        safe_print("Environment: Unknown")
+        print("📁 Input Base:  Unknown")
+        print("💾 Output Base: Unknown")
+        print("🗂️  Cache Base:  Unknown")
 
     # Determine deduplication setting
     enable_dedup = args.deduplicate and not args.no_dedup
