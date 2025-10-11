@@ -954,7 +954,7 @@ Examples:
     logger.info(
         f"📋 Processing {len(datasets_to_process)} datasets: {', '.join(datasets_to_process)}"
     )
-    
+
     # Debug: Check if dataset files exist
     logger.info("\n🔍 Checking dataset availability:")
     for dataset in datasets_to_process:
@@ -999,7 +999,14 @@ Examples:
         dataset_name = stats["dataset"]
         dataset_records = [r for r in all_records if r.get("dataset") == dataset_name]
 
-        normalized_dir = datasets_dir / dataset_name / "normalized"
+        # On Kaggle, save to /kaggle/working instead of read-only /kaggle/input
+        if str(datasets_dir).startswith("/kaggle/input"):
+            normalized_dir = (
+                Path("/kaggle/working/datasets") / dataset_name / "normalized"
+            )
+        else:
+            normalized_dir = datasets_dir / dataset_name / "normalized"
+
         normalized_file = normalized_dir / "normalized.jsonl"
 
         save_normalized_dataset_streaming(
