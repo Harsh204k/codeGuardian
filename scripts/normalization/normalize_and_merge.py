@@ -859,13 +859,14 @@ Examples:
     if not check_dependencies():
         sys.exit(1)
 
-    if not check_project_structure():
-        sys.exit(1)
-
-    # Ensure we're in the project root directory
+    # Ensure we're in the project root directory FIRST
     project_root = Path(__file__).parent.parent.parent
     os.chdir(project_root)
     safe_print(f"📂 Working directory set to: {os.getcwd()}")
+
+    # NOW check project structure after we're in the correct directory
+    if not check_project_structure():
+        sys.exit(1)
 
     # Print header
     safe_print("\n" + "=" * 80)
