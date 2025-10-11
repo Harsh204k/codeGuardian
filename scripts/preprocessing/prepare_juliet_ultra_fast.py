@@ -51,7 +51,7 @@ from scripts.utils.kaggle_paths import get_dataset_path, get_output_path, print_
 def fast_extract_function(content: str, func_name: str, is_csharp: bool = False) -> str:
     """
     Ultra-fast function extraction using simple string operations.
-    No expensive regex or brace matching - just find and extract.
+    More aggressive matching to catch all function variations.
     
     Args:
         content: Source code
@@ -61,45 +61,84 @@ def fast_extract_function(content: str, func_name: str, is_csharp: bool = False)
     Returns:
         Function code or empty string
     """
-    # Find function signature
+    # Multiple search strategies for robustness
     search_patterns = [
         f' {func_name}(',
         f'\t{func_name}(',
         f'\n{func_name}(',
+        f'_{func_name}(',  # Some functions have prefixes
     ]
     
     func_start = -1
     for pattern in search_patterns:
-        func_start = content.find(pattern)
-        if func_start != -1:
-            # Backtrack to find start of function (return type, modifiers)
+        idx = content.find(pattern)
+        if idx != -1:
+            # Found it - backtrack to start of function signature
+            func_start = idx
+            # Go back to find start of line
             while func_start > 0 and content[func_start - 1] not in '\n':
                 func_start -= 1
+            
+            # Go back further to find function modifiers/return type
+            # Look for previous newline, but capture multiple lines for signature
+            lines_back = 0
+            temp_pos = func_start - 1
+            while temp_pos > 0 and lines_back < 5:  # Look back max 5 lines
+                if content[temp_pos] == '\n':
+                    lines_back += 1
+                    # Check if this line has function-related keywords
+                    if lines_back == 1:
+                        func_start = temp_pos + 1
+                    elif any(kw in content[temp_pos:func_start].lower() 
+                           for kw in ['void', 'static', 'public', 'private', 'protected', 'override']):
+                        func_start = temp_pos + 1
+                    else:
+                        break
+                temp_pos -= 1
+            
             break
     
     if func_start == -1:
         return ""
     
-    # Find opening brace
+    # Find opening brace (search within reasonable range)
     brace_start = content.find('{', func_start)
-    if brace_start == -1:
+    if brace_start == -1 or brace_start - func_start > 500:  # Signature too long, probably wrong
         return ""
     
-    # Count braces to find closing brace (simplified - fast but 95% accurate)
+    # Count braces to find closing brace
     brace_count = 1
     pos = brace_start + 1
-    max_search = min(len(content), brace_start + 10000)  # Limit search range
+    max_search = min(len(content), brace_start + 20000)  # Max function size
+    in_string = False
+    in_char = False
+    escape_next = False
     
     while pos < max_search and brace_count > 0:
         char = content[pos]
-        if char == '{':
-            brace_count += 1
-        elif char == '}':
-            brace_count -= 1
+        
+        # Simple string/char handling (good enough for 95% accuracy)
+        if escape_next:
+            escape_next = False
+        elif char == '\\':
+            escape_next = True
+        elif char == '"' and not in_char:
+            in_string = not in_string
+        elif char == "'" and not in_string:
+            in_char = not in_char
+        elif not in_string and not in_char:
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+        
         pos += 1
     
     if brace_count == 0:
-        return content[func_start:pos].strip()
+        func_code = content[func_start:pos].strip()
+        # Validate: should contain the function name and reasonable length
+        if func_name in func_code and 20 < len(func_code) < 50000:
+            return func_code
     
     return ""
 
@@ -107,6 +146,7 @@ def fast_extract_function(content: str, func_name: str, is_csharp: bool = False)
 def extract_all_functions_fast(content: str, language: str) -> List[Tuple[str, int, str]]:
     """
     Extract bad() and good() functions using ultra-fast method.
+    Try multiple variations to maximize extraction rate.
     
     Returns:
         List of (function_code, label, function_name) tuples
@@ -114,27 +154,29 @@ def extract_all_functions_fast(content: str, language: str) -> List[Tuple[str, i
     functions = []
     is_csharp = language == 'C#'
     
-    # Try both cases for robustness
+    # Define all possible function names based on language
     if is_csharp:
-        bad_names = ['Bad', 'bad']
-        good_names = ['Good', 'good']
+        # C# uses PascalCase: Bad, Good
+        bad_names = ['Bad']
+        good_names = ['Good']
     else:
-        bad_names = ['bad', 'Bad']
-        good_names = ['good', 'Good']
+        # C, C++, Java use lowercase: bad, good
+        bad_names = ['bad']
+        good_names = ['good']
     
     # Extract bad function (vulnerable)
     for bad_name in bad_names:
         func_code = fast_extract_function(content, bad_name, is_csharp)
-        if func_code and len(func_code) > 20:
+        if func_code:
             functions.append((func_code, 1, bad_name))
-            break
+            break  # Found one, move on
     
     # Extract good function (safe)
     for good_name in good_names:
         func_code = fast_extract_function(content, good_name, is_csharp)
-        if func_code and len(func_code) > 20:
+        if func_code:
             functions.append((func_code, 0, good_name))
-            break
+            break  # Found one, move on
     
     return functions
 
@@ -230,10 +272,10 @@ def collect_all_files_fast(input_base: Path, languages: List[str]) -> List[Tuple
     all_files = []
     
     lang_configs = {
-        'c': {'dir': 'c', 'name': 'C', 'pattern': '**/*.c'},
-        'cpp': {'dir': 'c', 'name': 'C++', 'pattern': '**/*.cpp'},
-        'java': {'dir': 'java', 'name': 'Java', 'pattern': '**/testcases/**/*.java'},
-        'csharp': {'dir': 'csharp', 'name': 'C#', 'pattern': '**/testcases/**/*.cs'},
+        'c': {'dir': 'c', 'name': 'C', 'extensions': ['.c']},
+        'cpp': {'dir': 'c', 'name': 'C++', 'extensions': ['.cpp']},
+        'java': {'dir': 'java', 'name': 'Java', 'extensions': ['.java']},
+        'csharp': {'dir': 'csharp', 'name': 'C#', 'extensions': ['.cs']},
     }
     
     for lang_key in languages:
@@ -244,18 +286,31 @@ def collect_all_files_fast(input_base: Path, languages: List[str]) -> List[Tuple
         lang_dir = input_base / config['dir']
         
         if not lang_dir.exists():
+            print(f"  ⚠️  {config['name']} directory not found: {lang_dir}")
             continue
         
-        # Fast glob
-        testcases_dir = lang_dir / ('src/testcases' if lang_key in ('java', 'csharp') else 'testcases')
+        # Find testcases directory
+        if lang_key in ('java', 'csharp'):
+            testcases_dir = lang_dir / 'src' / 'testcases'
+            if not testcases_dir.exists():
+                testcases_dir = lang_dir / 'testcases'
+        else:
+            testcases_dir = lang_dir / 'testcases'
+        
         if not testcases_dir.exists():
-            testcases_dir = lang_dir
+            print(f"  ⚠️  {config['name']} testcases not found in: {lang_dir}")
+            continue
         
-        pattern = config['pattern']
-        files = list(testcases_dir.glob(pattern))
+        # Collect all files with the language's extensions
+        files = []
+        for ext in config['extensions']:
+            pattern = f"**/*{ext}"
+            matched = list(testcases_dir.glob(pattern))
+            files.extend(matched)
         
-        # Filter out support files
-        files = [f for f in files if 'support' not in str(f).lower() and 'common' not in str(f).lower()]
+        # Filter: Keep CWE files only (all Juliet test files have CWE in path/name)
+        # Don't filter "support" - many legitimate test files have it
+        files = [f for f in files if 'CWE' in str(f)]
         
         # Tag with language
         tagged_files = [(f, config['name']) for f in files]
