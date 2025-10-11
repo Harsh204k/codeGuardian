@@ -41,7 +41,7 @@ def discover_megavul_files(
     - label = 0 if in 'non_vul/' directory
     
     Args:
-        base_dir: Root directory (e.g., /kaggle/input/megavul or megavul/raw)
+        base_dir: Root directory (e.g., /kaggle/input/codeguardian-datasets/megavul or megavul/raw)
         target_languages: Filter languages (e.g., ['C', 'C++', 'Java'])
         
     Returns:
@@ -246,7 +246,7 @@ if __name__ == "__main__":
     )
     
     # Test with local dataset path
-    test_path = Path("/kaggle/input/megavul")
+    test_path = Path("/kaggle/input/codeguardian-datasets/megavul")
     
     if not test_path.exists():
         test_path = Path("../../../datasets/megavul")

@@ -32,7 +32,7 @@ find /kaggle/input -name "megavul" -type d
 ```
 
 **Common paths:**
-- `/kaggle/input/codeguardian-datasets/megavul`
+- `/kaggle/input/codeguardian-datasets/megavul` ← **Your actual path**
 - `/kaggle/input/megavul`
 - `/kaggle/input/megavul-dataset/megavul`
 
@@ -160,7 +160,7 @@ df -h /kaggle/working
 
 **Error:**
 ```
-❌ Test path not found: /kaggle/input/megavul
+❌ Test path not found: /kaggle/input/codeguardian-datasets/megavul
 ```
 
 **Solution:**

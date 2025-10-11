@@ -107,7 +107,7 @@ python prepare_megavul_chunked.py --test --no-drive-sync
 ### **Configuration** (`config_megavul.yaml`)
 ```yaml
 # Your actual dataset path
-raw_dataset_dir: "/kaggle/input/megavul"  # or local path
+raw_dataset_dir: "/kaggle/input/codeguardian-datasets/megavul"  # or local path
 
 # Optimal chunk size
 chunk_size_records: 50000
