@@ -93,6 +93,7 @@ DESCRIPTION_PATTERN = re.compile(
 def find_matching_brace(content: str, start_pos: int) -> int:
     """
     Find the position of the matching closing brace.
+    Handles nested braces, strings, chars, and comments.
     
     Args:
         content: The source code string
@@ -101,44 +102,80 @@ def find_matching_brace(content: str, start_pos: int) -> int:
     Returns:
         Position of the matching closing brace, or -1 if not found
     """
+    if start_pos >= len(content) or content[start_pos] != '{':
+        return -1
+    
     brace_count = 1
     pos = start_pos + 1
     in_string = False
     in_char = False
-    in_comment = False
+    in_single_comment = False
     in_block_comment = False
+    escape_next = False
     
     while pos < len(content) and brace_count > 0:
-        # Handle string literals
-        if content[pos] == '"' and not in_char and not in_comment and not in_block_comment:
-            if pos == 0 or content[pos-1] != '\\':
-                in_string = not in_string
+        char = content[pos]
+        prev_char = content[pos-1] if pos > 0 else ''
+        next_char = content[pos+1] if pos < len(content)-1 else ''
         
-        # Handle char literals
-        elif content[pos] == "'" and not in_string and not in_comment and not in_block_comment:
-            if pos == 0 or content[pos-1] != '\\':
-                in_char = not in_char
-        
-        # Handle single-line comments
-        elif content[pos:pos+2] == '//' and not in_string and not in_char and not in_block_comment:
-            in_comment = True
-        elif content[pos] == '\n' and in_comment:
-            in_comment = False
-        
-        # Handle block comments
-        elif content[pos:pos+2] == '/*' and not in_string and not in_char and not in_comment:
-            in_block_comment = True
+        # Handle escape sequences
+        if escape_next:
+            escape_next = False
             pos += 1
-        elif content[pos:pos+2] == '*/' and in_block_comment:
-            in_block_comment = False
-            pos += 1
+            continue
         
-        # Count braces only if not in string/char/comment
-        elif not in_string and not in_char and not in_comment and not in_block_comment:
-            if content[pos] == '{':
+        if char == '\\' and (in_string or in_char):
+            escape_next = True
+            pos += 1
+            continue
+        
+        # Handle block comments /* */
+        if not in_string and not in_char and not in_single_comment:
+            if char == '/' and next_char == '*':
+                in_block_comment = True
+                pos += 2
+                continue
+            elif in_block_comment and char == '*' and next_char == '/':
+                in_block_comment = False
+                pos += 2
+                continue
+        
+        # Handle single-line comments //
+        if not in_string and not in_char and not in_block_comment:
+            if char == '/' and next_char == '/':
+                in_single_comment = True
+                pos += 2
+                continue
+            elif in_single_comment and char == '\n':
+                in_single_comment = False
+                pos += 1
+                continue
+        
+        # Skip if in any comment
+        if in_single_comment or in_block_comment:
+            pos += 1
+            continue
+        
+        # Handle string literals "..."
+        if char == '"' and not in_char:
+            in_string = not in_string
+            pos += 1
+            continue
+        
+        # Handle char literals '...'
+        if char == "'" and not in_string:
+            in_char = not in_char
+            pos += 1
+            continue
+        
+        # Count braces only if not in string, char, or comment
+        if not in_string and not in_char:
+            if char == '{':
                 brace_count += 1
-            elif content[pos] == '}':
+            elif char == '}':
                 brace_count -= 1
+                if brace_count == 0:
+                    return pos
         
         pos += 1
     
@@ -157,23 +194,27 @@ def extract_function_with_name(content: str, func_name: str, language: str) -> O
     Returns:
         Full function code, or None if not found
     """
-    # Build regex pattern based on language
+    # Build regex pattern based on language - MUCH MORE FLEXIBLE
     if language in ('C', 'C++'):
-        # Match: [static] [inline] return_type func_name ( params ) {
-        pattern = rf'(?:static\s+)?(?:inline\s+)?(?:\w+\s+)+{func_name}\s*\([^)]*\)\s*\{{'
+        # Match: anything followed by func_name ( ... ) {
+        # This handles: void bad(), static void bad(), inline void bad(), etc.
+        pattern = rf'\b\w+(?:\s+\w+)*\s+{func_name}\s*\([^)]*\)\s*{{'
     elif language == 'Java':
-        # Match: [public/private/protected] [static] return_type func_name ( params ) [throws ...] {
-        pattern = rf'(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)+{func_name}\s*\([^)]*\)(?:\s+throws[^{{]*)?{{'
+        # Match: anything followed by func_name ( ... ) possibly throws ... {
+        pattern = rf'\b\w+(?:\s+\w+)*\s+{func_name}\s*\([^)]*\)(?:\s+throws[^{{]*)?{{'
     elif language == 'C#':
-        # Match: [public/private/protected] [override] [static] return_type func_name ( params ) {
-        pattern = rf'(?:public|private|protected)?\s*(?:override\s+)?(?:static\s+)?(?:\w+\s+)+{func_name}\s*\([^)]*\)\s*{{'
+        # Match: anything followed by func_name ( ... ) {
+        pattern = rf'\b\w+(?:\s+\w+)*\s+{func_name}\s*\([^)]*\)\s*{{'
     else:
         return None
     
-    # Find the function signature
-    match = re.search(pattern, content, re.MULTILINE | re.IGNORECASE)
+    # Find the function signature (case-sensitive for function name)
+    match = re.search(pattern, content, re.MULTILINE)
     if not match:
-        return None
+        # Try case-insensitive as fallback
+        match = re.search(pattern, content, re.MULTILINE | re.IGNORECASE)
+        if not match:
+            return None
     
     # Find the opening brace position
     sig_end = match.end() - 1  # Position of '{'
@@ -181,7 +222,13 @@ def extract_function_with_name(content: str, func_name: str, language: str) -> O
     # Find matching closing brace
     close_brace = find_matching_brace(content, sig_end)
     if close_brace == -1:
-        return None
+        # Fallback: try to find next standalone }
+        remaining = content[sig_end:]
+        brace_match = re.search(r'\n}\s*$', remaining, re.MULTILINE)
+        if brace_match:
+            close_brace = sig_end + brace_match.end() - 1
+        else:
+            return None
     
     # Extract full function including signature and body
     func_code = content[match.start():close_brace + 1]
@@ -203,23 +250,84 @@ def extract_functions_robust(content: str, language: str) -> List[Tuple[str, int
     
     # Define function names to search for based on language
     if language == 'C#':
-        bad_names = ['Bad']
-        good_names = ['Good']
+        bad_names = ['Bad', 'bad']  # Try both cases
+        good_names = ['Good', 'good']
     else:
-        bad_names = ['bad']
-        good_names = ['good']
+        bad_names = ['bad', 'Bad']  # Try both cases
+        good_names = ['good', 'Good']
     
     # Extract bad functions (vulnerable)
     for bad_name in bad_names:
         func_code = extract_function_with_name(content, bad_name, language)
         if func_code:
             functions.append((func_code, 1, bad_name))
+            break  # Found it, no need to try other case
     
     # Extract good functions (safe)
     for good_name in good_names:
         func_code = extract_function_with_name(content, good_name, language)
         if func_code:
             functions.append((func_code, 0, good_name))
+            break  # Found it, no need to try other case
+    
+    # If we didn't find both functions, try a more aggressive approach
+    if len(functions) < 2:
+        # Try to find ANY function with 'bad' or 'good' in the name
+        aggressive_functions = extract_functions_aggressive(content, language)
+        
+        # Add any functions we didn't find with the primary method
+        found_bad = any(f[2].lower() == 'bad' for f in functions)
+        found_good = any(f[2].lower() == 'good' for f in functions)
+        
+        for func_code, label, func_name in aggressive_functions:
+            if label == 1 and not found_bad:
+                functions.append((func_code, label, func_name))
+                found_bad = True
+            elif label == 0 and not found_good:
+                functions.append((func_code, label, func_name))
+                found_good = True
+    
+    return functions
+
+
+def extract_functions_aggressive(content: str, language: str) -> List[Tuple[str, int, str]]:
+    """
+    Aggressive function extraction as fallback.
+    Looks for any function containing 'bad' or 'good' in the name.
+    
+    Args:
+        content: Source file content
+        language: Programming language
+        
+    Returns:
+        List of (function_code, label, function_name) tuples
+    """
+    functions = []
+    
+    # Pattern to find function names
+    if language in ('C', 'C++'):
+        name_pattern = r'\b(\w*(?:bad|good)\w*)\s*\('
+    elif language == 'Java':
+        name_pattern = r'\b(\w*(?:bad|good|Bad|Good)\w*)\s*\('
+    elif language == 'C#':
+        name_pattern = r'\b(\w*(?:Bad|Good|bad|good)\w*)\s*\('
+    else:
+        return []
+    
+    # Find all potential function names
+    for match in re.finditer(name_pattern, content, re.IGNORECASE):
+        func_name = match.group(1)
+        
+        # Skip if it's not exactly 'bad', 'good', 'Bad', or 'Good'
+        if func_name.lower() not in ['bad', 'good']:
+            continue
+        
+        # Try to extract this function
+        func_code = extract_function_with_name(content, func_name, language)
+        if func_code:
+            # Determine label based on name
+            label = 1 if 'bad' in func_name.lower() else 0
+            functions.append((func_code, label, func_name))
     
     return functions
 
@@ -345,6 +453,7 @@ def process_single_file(file_info: Tuple[Path, Path, str]) -> List[Dict[str, Any
         # Read file content
         content = safe_read_text(file_path)
         if not content:
+            logger.debug(f"Empty file: {file_path.name}")
             return []
         
         # Extract metadata
@@ -362,7 +471,9 @@ def process_single_file(file_info: Tuple[Path, Path, str]) -> List[Dict[str, Any
         functions = extract_functions(content, language)
         
         if not functions:
-            logger.debug(f"No functions extracted from {file_path.name}")
+            # Log warning for debugging
+            if len(content) > 100:  # Only log if file has substantial content
+                logger.debug(f"No functions extracted from {file_path.name} (language={language}, size={len(content)})")
             return []
         
         # Create records for each function
@@ -406,7 +517,7 @@ def process_single_file(file_info: Tuple[Path, Path, str]) -> List[Dict[str, Any
             records.append(record)
         
     except Exception as e:
-        logger.error(f"Error processing {file_path}: {e}")
+        logger.error(f"Error processing {file_path.name}: {e}")
         return []
     
     return records
