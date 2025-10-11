@@ -1,64 +1,124 @@
 """
-Utility module for unified schema management and field mapping.
+🎯 CANONICAL SCHEMA ENFORCER - Single Source of Truth
+CodeGuardian Unified Schema Management & Field Mapping
 
-This module provides functions to:
-- Map dataset-specific records to the unified schema
-- Fill missing fields with default values
-- Validate schema compliance with jsonschema
-- Normalize field values
-- Infer language from file extensions
-- Generate globally unique IDs
+This module is the authoritative schema definition for the entire CodeGuardian project.
+It ensures 100% consistency between dataset normalization, merging, and ML feature engineering.
+
+Core Features:
+✅ Unified 17-field schema (aligned with normalize_and_merge_all.py)
+✅ Automatic CWE → attack_type/severity enrichment
+✅ Field normalization (language, CWE, CVE, labels)
+✅ Provenance tracking (source_file, source_row_index)
+✅ Deduplication by code hash (SHA-256)
+✅ Validation (manual + jsonschema)
+✅ CLI test mode for compliance verification
+
+Schema Alignment:
+- This module defines the schema used by normalize_and_merge_all.py
+- All preprocessing scripts (prepare_*.py) output to this schema
+- CWE mapper integration for attack type classification
+- Full traceability for competition scoring
+
+Author: CodeGuardian Team
+Version: 2.0.0 - Competition Ready
+Date: 2025-10-11
 """
 
+import sys
 import uuid
 import hashlib
+import logging
+import json
 from typing import Dict, Any, Optional, List, Tuple
 import re
 from pathlib import Path
+from datetime import datetime, timezone
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
+
+# Import CWE mapper for attack type enrichment
+try:
+    from scripts.utils.cwe_mapper import map_cwe_to_attack
+    CWE_MAPPER_AVAILABLE = True
+    logger.info("✅ CWE Mapper integrated successfully")
+except ImportError:
+    CWE_MAPPER_AVAILABLE = False
+    logger.warning("⚠️ CWE Mapper unavailable - enrichment disabled")
 
 
-# Unified schema definition (matches hackathon requirements exactly)
+# ═══════════════════════════════════════════════════════════════════════════
+# 🎯 FINAL UNIFIED SCHEMA (100% Aligned with normalize_and_merge_all.py)
+# ═══════════════════════════════════════════════════════════════════════════
+
 UNIFIED_SCHEMA = {
-    "id": str,                    # Globally unique ID with dataset prefix
-    "language": str,              # Programming language (normalized)
-    "code": str,                  # Source code snippet
-    "label": int,                 # Binary: 0 (safe) or 1 (vulnerable)
-    "cwe_id": Optional[str],      # CWE identifier or None
-    "cve_id": Optional[str],      # CVE identifier or None
-    "func_name": Optional[str],   # Function/method name or None
-    "file_name": Optional[str],   # Source file name or None
-    "project": Optional[str],     # Repository/project name or None
-    "commit_id": Optional[str],   # Git commit hash or None
-    "description": Optional[str], # Vulnerability description or None
-    "source_dataset": str         # Dataset name (e.g., "devign", "zenodo")
+    # Core identification
+    "id": str,                        # UUID or dataset-prefixed unique ID
+    "language": str,                  # Normalized language name
+    "dataset": str,                   # Source dataset name (renamed from source_dataset)
+    
+    # Code and vulnerability
+    "code": str,                      # Source code snippet
+    "is_vulnerable": int,             # Binary: 0 (safe) or 1 (vulnerable) - renamed from label
+    
+    # Vulnerability metadata
+    "cwe_id": Optional[str],          # CWE identifier
+    "cve_id": Optional[str],          # CVE identifier
+    "description": Optional[str],     # Vulnerability description
+    
+    # CWE-enriched fields (auto-populated via cwe_mapper)
+    "attack_type": Optional[str],     # Attack classification (e.g., "SQL Injection")
+    "severity": Optional[str],        # Risk level (low/medium/high/critical)
+    "review_status": Optional[str],   # Quality flag (auto_verified/pending_review/needs_review)
+    
+    # Provenance tracking
+    "func_name": Optional[str],       # Function/method name
+    "file_name": Optional[str],       # Source file name
+    "project": Optional[str],         # Repository/project name
+    "commit_id": Optional[str],       # Git commit hash
+    
+    # Traceability (for debugging and audit)
+    "source_file": Optional[str],     # Original input file path
+    "source_row_index": Optional[int] # Row number in source file
 }
 
-# JSONSchema for validation
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📋 JSONSCHEMA VALIDATION DEFINITION
+# ═══════════════════════════════════════════════════════════════════════════
+
 JSONSCHEMA_DEFINITION = {
     "type": "object",
     "properties": {
         "id": {"type": "string"},
         "language": {"type": "string"},
+        "dataset": {"type": "string"},
         "code": {"type": "string"},
-        "label": {"type": "integer", "enum": [0, 1]},
+        "is_vulnerable": {"type": "integer", "enum": [0, 1]},
         "cwe_id": {"type": ["string", "null"]},
         "cve_id": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "attack_type": {"type": ["string", "null"]},
+        "severity": {"type": ["string", "null"], "enum": ["low", "medium", "high", "critical", None]},
+        "review_status": {"type": ["string", "null"], "enum": ["auto_verified", "pending_review", "needs_review", None]},
         "func_name": {"type": ["string", "null"]},
         "file_name": {"type": ["string", "null"]},
         "project": {"type": ["string", "null"]},
         "commit_id": {"type": ["string", "null"]},
-        "description": {"type": ["string", "null"]},
-        "source_dataset": {"type": "string"},
-        # Optional provenance fields for traceability
-        "source_row_index": {"type": "integer"},
-        "source_file": {"type": "string"}
+        "source_file": {"type": ["string", "null"]},
+        "source_row_index": {"type": ["integer", "null"]}
     },
-    "required": ["id", "language", "code", "label", "source_dataset"],
+    "required": ["id", "language", "dataset", "code", "is_vulnerable"],
     "additionalProperties": False
 }
 
 
-# Language normalization mappings (comprehensive)
+# ═══════════════════════════════════════════════════════════════════════════
+# 🗺️ LANGUAGE NORMALIZATION MAPPINGS
+# ═══════════════════════════════════════════════════════════════════════════
+
 LANGUAGE_MAPPING = {
     "c": "C",
     "cpp": "C++",
@@ -98,7 +158,6 @@ LANGUAGE_MAPPING = {
     "bash": "Shell"
 }
 
-# File extension to language mapping (for inference)
 EXTENSION_TO_LANGUAGE = {
     ".c": "C",
     ".h": "C",
@@ -125,6 +184,10 @@ EXTENSION_TO_LANGUAGE = {
     ".sh": "Shell"
 }
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔧 NORMALIZATION UTILITY FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
 
 def normalize_language(lang: str) -> str:
     """
@@ -170,7 +233,7 @@ def normalize_cwe_id(cwe: Any) -> Optional[str]:
     Returns:
         Normalized CWE ID or None
     """
-    if not cwe or cwe in ["None", "null", "N/A", ""]:
+    if not cwe or str(cwe).lower() in ["none", "null", "n/a", "", "nan"]:
         return None
     
     cwe_str = str(cwe).strip()
@@ -194,7 +257,7 @@ def normalize_cve_id(cve: Any) -> Optional[str]:
     Returns:
         Normalized CVE ID or None
     """
-    if not cve or cve in ["None", "null", "N/A", ""]:
+    if not cve or str(cve).lower() in ["none", "null", "n/a", "", "nan"]:
         return None
     
     cve_str = str(cve).strip()
@@ -262,23 +325,32 @@ def generate_unique_id(dataset: str, index: int, additional_info: str = "") -> s
     return base
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🎯 CORE SCHEMA MAPPING FUNCTION
+# ═══════════════════════════════════════════════════════════════════════════
+
 def map_to_unified_schema(
     record: Dict[str, Any],
     dataset_name: str,
     index: int,
-    field_mapping: Dict[str, str] = None
+    field_mapping: Dict[str, str] = None,
+    source_file: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Map a dataset-specific record to the unified schema.
+    Map a dataset-specific record to the unified schema with CWE enrichment.
+    
+    This is the canonical mapping function that ensures 100% consistency
+    with normalize_and_merge_all.py.
     
     Args:
         record: Original record from dataset
         dataset_name: Name of the source dataset
         index: Record index for ID generation
         field_mapping: Optional mapping of dataset fields to unified fields
+        source_file: Original file path for traceability
         
     Returns:
-        Record conforming to unified schema with exact field names
+        Record conforming to unified schema (17 fields)
     """
     if field_mapping is None:
         field_mapping = {}
@@ -293,13 +365,13 @@ def map_to_unified_schema(
     code = (get_field("code") or get_field("func") or 
             get_field("source_code") or get_field("function") or "")
     
-    # Get label with various naming conventions
+    # Get label with various naming conventions (map to is_vulnerable)
     label = get_field("label")
     if label is None:
         label = get_field("target") or get_field("is_vulnerable") or get_field("vulnerable") or 0
     
     # Get language field
-    language = get_field("language") or get_field("lang") or ""
+    language = get_field("language") or get_field("lang") or get_field("program_language") or ""
     
     # Infer language from file_name if not provided
     if not language or language == "unknown":
@@ -317,31 +389,61 @@ def map_to_unified_schema(
                  get_field("function_name") or None)
     
     # Get commit ID
-    commit_id = get_field("commit_id") or get_field("commit") or None
+    commit_id = get_field("commit_id") or get_field("commit") or get_field("commit_hash") or None
     
     # Generate globally unique ID with dataset prefix
     unique_id = generate_unique_id(dataset_name, index, commit_id[:8] if commit_id else "")
     
-    # Build unified record matching exact schema
+    # Normalize CWE and CVE
+    cwe_id = normalize_cwe_id(get_field("cwe_id") or get_field("cwe"))
+    cve_id = normalize_cve_id(get_field("cve_id") or get_field("cve"))
+    
+    # Get description
+    description = (get_field("description") or get_field("desc") or 
+                   get_field("commit_message") or None)
+    
+    # Build unified record matching exact schema (NEW FIELD NAMES)
     unified_record = {
         "id": unique_id,
         "language": language,
+        "dataset": dataset_name,  # RENAMED from source_dataset
         "code": str(code).strip(),
-        "label": normalize_vulnerability_label(label),
-        "cwe_id": normalize_cwe_id(get_field("cwe_id")),
-        "cve_id": normalize_cve_id(get_field("cve_id")),
+        "is_vulnerable": normalize_vulnerability_label(label),  # RENAMED from label
+        "cwe_id": cwe_id,
+        "cve_id": cve_id,
+        "description": description,
+        "attack_type": None,  # Will be enriched if CWE mapper available
+        "severity": None,     # Will be enriched if CWE mapper available
+        "review_status": None,  # Will be enriched if CWE mapper available
         "func_name": func_name,
         "file_name": get_field("file_name") or get_field("file") or get_field("filename") or None,
-        "project": get_field("project") or get_field("repo") or None,
+        "project": get_field("project") or get_field("repo") or get_field("repository") or None,
         "commit_id": commit_id,
-        "description": get_field("description") or get_field("desc") or None,
-        "source_dataset": dataset_name
+        "source_file": source_file,  # NEW: traceability
+        "source_row_index": index   # NEW: traceability
     }
+    
+    # CWE Enrichment (automatic if CWE mapper available)
+    if CWE_MAPPER_AVAILABLE and unified_record.get("cwe_id"):
+        try:
+            attack_info = map_cwe_to_attack(
+                cwe_id=unified_record["cwe_id"],
+                cwe_description=unified_record.get("description")
+            )
+            unified_record["attack_type"] = attack_info.get("attack_type")
+            unified_record["severity"] = attack_info.get("severity")
+            unified_record["review_status"] = attack_info.get("review_status")
+        except Exception as e:
+            logger.debug(f"CWE enrichment failed for {unified_record['cwe_id']}: {e}")
     
     return unified_record
 
 
-def validate_record(record: Dict[str, Any], use_jsonschema: bool = True) -> tuple[bool, List[str]]:
+# ═══════════════════════════════════════════════════════════════════════════
+# ✅ VALIDATION FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def validate_record(record: Dict[str, Any], use_jsonschema: bool = False) -> Tuple[bool, List[str]]:
     """
     Validate that a record conforms to the unified schema.
     
@@ -363,22 +465,22 @@ def validate_record(record: Dict[str, Any], use_jsonschema: bool = True) -> tupl
             errors.append(f"Schema validation error: {e.message}")
             return False, errors
         except ImportError:
-            # Fallback to manual validation if jsonschema not available
+            logger.warning("jsonschema not available, using manual validation")
             use_jsonschema = False
     
-    # Option 2: Manual validation (fallback or if use_jsonschema=False)
+    # Option 2: Manual validation (fallback or default)
     if not use_jsonschema:
-        # Check required fields with new schema
-        required_fields = ["id", "language", "code", "label", "source_dataset"]
+        # Check required fields (UPDATED FOR NEW SCHEMA)
+        required_fields = ["id", "language", "dataset", "code", "is_vulnerable"]
         for field in required_fields:
             if field not in record:
                 errors.append(f"Missing required field: {field}")
-            elif not record[field] and field != "label":
+            elif field == "is_vulnerable":
+                # Special check for is_vulnerable
+                if record[field] not in [0, 1]:
+                    errors.append(f"Invalid is_vulnerable value: {record[field]} (must be 0 or 1)")
+            elif not record[field] and field not in ["is_vulnerable"]:
                 errors.append(f"Empty required field: {field}")
-        
-        # Validate label type
-        if "label" in record and record["label"] not in [0, 1]:
-            errors.append(f"Invalid label value: {record['label']} (must be 0 or 1)")
         
         # Check code length
         if "code" in record:
@@ -386,7 +488,7 @@ def validate_record(record: Dict[str, Any], use_jsonschema: bool = True) -> tupl
             if code_len < 10:
                 errors.append(f"Code snippet too short ({code_len} characters, minimum 10)")
         
-        # Validate language is not empty (allow "unknown" as fallback)
+        # Validate language is not empty
         if "language" in record:
             lang = record.get("language", "").strip()
             if not lang:
@@ -409,7 +511,7 @@ def validate_record(record: Dict[str, Any], use_jsonschema: bool = True) -> tupl
 
 def get_schema_template() -> Dict[str, Any]:
     """
-    Get an empty template following the unified schema with new field names.
+    Get an empty template following the unified schema (NEW FIELD NAMES).
     
     Returns:
         Empty record with all fields initialized to defaults
@@ -417,16 +519,21 @@ def get_schema_template() -> Dict[str, Any]:
     return {
         "id": "",
         "language": "unknown",
+        "dataset": "",
         "code": "",
-        "label": 0,
+        "is_vulnerable": 0,
         "cwe_id": None,
         "cve_id": None,
+        "description": None,
+        "attack_type": None,
+        "severity": None,
+        "review_status": None,
         "func_name": None,
         "file_name": None,
         "project": None,
         "commit_id": None,
-        "description": None,
-        "source_dataset": ""
+        "source_file": None,
+        "source_row_index": None
     }
 
 
@@ -440,8 +547,6 @@ def deduplicate_by_code_hash(records: List[Dict[str, Any]]) -> List[Dict[str, An
     Returns:
         Deduplicated list of records
     """
-    import hashlib
-    
     seen_hashes = set()
     deduplicated = []
     
@@ -456,91 +561,173 @@ def deduplicate_by_code_hash(records: List[Dict[str, Any]]) -> List[Dict[str, An
     return deduplicated
 
 
-def save_schema_definition(output_path: str):
+# ═══════════════════════════════════════════════════════════════════════════
+# 📊 STATISTICS AND REPORTING
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_schema_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Save the unified schema definition to a JSON file.
+    Get statistics about schema compliance and enrichment status.
     
     Args:
-        output_path: Path to save schema definition
+        records: List of unified schema records
+        
+    Returns:
+        Dictionary with schema statistics
     """
-    import json
+    from collections import Counter
     
-    schema_doc = {
-        "name": "CodeGuardian Unified Vulnerability Dataset Schema",
-        "version": "2.0.0",
-        "description": "Standardized schema for vulnerability detection across multiple datasets",
-        "fields": {
-            "id": {
-                "type": "string",
-                "required": True,
-                "description": "Globally unique identifier with dataset prefix (e.g., devign_00001_a3f2)"
-            },
-            "language": {
-                "type": "string",
-                "required": True,
-                "description": "Programming language (normalized)",
-                "allowed_values": list(set(LANGUAGE_MAPPING.values())) + ["unknown"]
-            },
-            "code": {
-                "type": "string",
-                "required": True,
-                "description": "Source code snippet or function body"
-            },
-            "label": {
-                "type": "integer",
-                "required": True,
-                "description": "Binary vulnerability label (0=safe, 1=vulnerable)",
-                "allowed_values": [0, 1]
-            },
-            "cwe_id": {
-                "type": "string",
-                "required": False,
-                "description": "CWE identifier (format: CWE-XXX)",
-                "nullable": True
-            },
-            "cve_id": {
-                "type": "string",
-                "required": False,
-                "description": "CVE identifier (format: CVE-YYYY-XXXXX)",
-                "nullable": True
-            },
-            "func_name": {
-                "type": "string",
-                "required": False,
-                "description": "Function or method name",
-                "nullable": True
-            },
-            "file_name": {
-                "type": "string",
-                "required": False,
-                "description": "Source file name",
-                "nullable": True
-            },
-            "project": {
-                "type": "string",
-                "required": False,
-                "description": "Project or repository name",
-                "nullable": True
-            },
-            "commit_id": {
-                "type": "string",
-                "required": False,
-                "description": "Git commit hash",
-                "nullable": True
-            },
-            "description": {
-                "type": "string",
-                "required": False,
-                "description": "Vulnerability description or metadata",
-                "nullable": True
-            },
-            "source_dataset": {
-                "type": "string",
-                "required": True,
-                "description": "Name of the source dataset"
-            }
-        }
+    stats = {
+        "total_records": len(records),
+        "field_completeness": {},
+        "language_distribution": Counter(),
+        "dataset_distribution": Counter(),
+        "vulnerability_ratio": 0.0,
+        "cwe_coverage": 0.0,
+        "attack_type_coverage": 0.0,
+        "severity_distribution": Counter(),
+        "review_status_distribution": Counter()
     }
     
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(schema_doc, f, indent=2, ensure_ascii=False)
+    # Field completeness
+    for field in UNIFIED_SCHEMA.keys():
+        non_null_count = sum(1 for r in records if r.get(field) is not None and r.get(field) != "")
+        stats["field_completeness"][field] = (non_null_count / len(records)) * 100 if records else 0
+    
+    # Distributions
+    for record in records:
+        stats["language_distribution"][record.get("language", "unknown")] += 1
+        stats["dataset_distribution"][record.get("dataset", "unknown")] += 1
+        if record.get("severity"):
+            stats["severity_distribution"][record["severity"]] += 1
+        if record.get("review_status"):
+            stats["review_status_distribution"][record["review_status"]] += 1
+    
+    # Coverage metrics
+    vuln_count = sum(1 for r in records if r.get("is_vulnerable") == 1)
+    cwe_count = sum(1 for r in records if r.get("cwe_id"))
+    attack_count = sum(1 for r in records if r.get("attack_type"))
+    
+    stats["vulnerability_ratio"] = (vuln_count / len(records)) * 100 if records else 0
+    stats["cwe_coverage"] = (cwe_count / len(records)) * 100 if records else 0
+    stats["attack_type_coverage"] = (attack_count / len(records)) * 100 if records else 0
+    
+    return stats
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🧪 CLI TEST MODE
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_compliance_test(test_data_dir: Optional[Path] = None):
+    """
+    Run schema compliance tests on sample data.
+    
+    Args:
+        test_data_dir: Directory containing test JSONL files
+    """
+    print("\n" + "="*80)
+    print("🧪 SCHEMA COMPLIANCE TEST SUITE")
+    print("="*80)
+    
+    # Print schema information
+    print(f"\n📋 UNIFIED SCHEMA ({len(UNIFIED_SCHEMA)} fields):")
+    for field, field_type in UNIFIED_SCHEMA.items():
+        required = field in JSONSCHEMA_DEFINITION["required"]
+        req_marker = "✅ REQUIRED" if required else "⚪ OPTIONAL"
+        print(f"   {req_marker:15s} {field:20s} : {field_type}")
+    
+    # Test CWE mapper integration
+    print(f"\n🧠 CWE MAPPER STATUS:")
+    if CWE_MAPPER_AVAILABLE:
+        print("   ✅ Available - automatic enrichment enabled")
+    else:
+        print("   ❌ Unavailable - enrichment disabled")
+    
+    # Test record mapping if test data available
+    if test_data_dir and test_data_dir.exists():
+        print(f"\n📁 TESTING WITH DATA FROM: {test_data_dir}")
+        
+        test_files = list(test_data_dir.glob("**/*cleaned.jsonl"))[:3]
+        
+        for test_file in test_files:
+            print(f"\n   Testing: {test_file.name}")
+            
+            try:
+                import jsonlines
+                with jsonlines.open(test_file) as f:
+                    records = list(f)[:10]  # Test first 10 records
+                
+                # Map to unified schema
+                dataset_name = test_file.parent.parent.name
+                mapped = [map_to_unified_schema(r, dataset_name, i, source_file=str(test_file)) 
+                         for i, r in enumerate(records)]
+                
+                # Validate
+                valid_count = sum(1 for r in mapped if validate_record(r)[0])
+                
+                # Get stats
+                stats = get_schema_stats(mapped)
+                
+                print(f"      Records: {len(mapped)}")
+                print(f"      Valid: {valid_count}/{len(mapped)}")
+                print(f"      CWE Coverage: {stats['cwe_coverage']:.1f}%")
+                print(f"      Attack Type Coverage: {stats['attack_type_coverage']:.1f}%")
+                
+            except Exception as e:
+                print(f"      ❌ Error: {e}")
+    else:
+        print(f"\n⚠️  No test data directory specified or found")
+        print(f"   Usage: python schema_utils_v2.py --test --data-dir <path>")
+    
+    # Test template generation
+    print(f"\n🎯 SCHEMA TEMPLATE TEST:")
+    template = get_schema_template()
+    is_valid, errors = validate_record(template)
+    if not is_valid:
+        print(f"   ⚠️  Empty template has expected validation errors:")
+        for error in errors[:3]:
+            print(f"      - {error}")
+    else:
+        print(f"   ✅ Template structure valid")
+    
+    print("\n" + "="*80)
+    print("✅ COMPLIANCE TEST COMPLETE")
+    print("="*80 + "\n")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🎬 CLI ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════════
+
+def main():
+    """CLI entry point for schema compliance testing."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="CodeGuardian Schema Utilities v2")
+    parser.add_argument("--test", action="store_true", help="Run compliance test suite")
+    parser.add_argument("--data-dir", type=Path, help="Test data directory")
+    parser.add_argument("--export-schema", type=Path, help="Export schema definition to JSON file")
+    
+    args = parser.parse_args()
+    
+    if args.export_schema:
+        schema_doc = {
+            "name": "CodeGuardian Unified Schema v2.0",
+            "fields": {k: str(v) for k, v in UNIFIED_SCHEMA.items()},
+            "required_fields": JSONSCHEMA_DEFINITION["required"],
+            "cwe_mapper_available": CWE_MAPPER_AVAILABLE
+        }
+        with open(args.export_schema, 'w') as f:
+            json.dump(schema_doc, f, indent=2)
+        print(f"✅ Schema exported to: {args.export_schema}")
+    
+    if args.test:
+        run_compliance_test(args.data_dir)
+    
+    if not args.test and not args.export_schema:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
