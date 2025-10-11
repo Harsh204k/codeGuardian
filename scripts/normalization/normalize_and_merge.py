@@ -216,6 +216,85 @@ def safe_print(text):
     print(text)
 
 
+def safe_log(level, message):
+    """Log message safely, removing emojis on Windows if needed."""
+    if not EMOJI_SAFE:
+        # Remove common emojis that cause issues
+        emoji_map = {
+            "🚀": "[START]",
+            "✅": "[OK]",
+            "❌": "[ERROR]",
+            "⚠️": "[WARN]",
+            "📂": "[LOAD]",
+            "💾": "[SAVE]",
+            "🗂️": "[CACHE]",
+            "🎯": "[TARGET]",
+            "🔄": "[SYNC]",
+            "⚡": "[FAST]",
+            "📝": "[NOTE]",
+            "🔗": "[LINK]",
+            "📊": "[STATS]",
+            "🛡️": "[SECURE]",
+            "🌐": "[WEB]",
+            "📁": "[DIR]",
+            "📄": "[DOC]",
+            "🗑️": "[DELETE]",
+            "→": "->",
+            "═": "=",
+            "┏": "+",
+            "┃": "|",
+            "┡": "+",
+            "│": "|",
+            "└": "+",
+            "┴": "+",
+            "┌": "+",
+            "┬": "+",
+            "├": "+",
+            "┼": "+",
+            "┤": "+",
+            "┘": "+",
+            "┶": "+",
+            "┷": "+",
+            "┸": "+",
+            "┹": "+",
+            "┺": "+",
+            "┻": "+",
+            "┼": "+",
+            "┽": "+",
+            "┾": "+",
+            "┿": "+",
+            "╀": "+",
+            "╁": "+",
+            "╂": "+",
+            "╃": "+",
+            "╄": "+",
+            "╅": "+",
+            "╆": "+",
+            "╇": "+",
+            "╈": "+",
+            "╉": "+",
+            "╊": "+",
+            "╋": "+",
+            "╌": "-",
+            "╍": "=",
+            "╎": "|",
+            "╏": "|",
+        }
+        for emoji, replacement in emoji_map.items():
+            message = message.replace(emoji, replacement)
+
+    if level == "info":
+        logger.info(message)
+    elif level == "warning":
+        logger.warning(message)
+    elif level == "error":
+        logger.error(message)
+    elif level == "debug":
+        logger.debug(message)
+    else:
+        logger.info(message)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 📂 DATASET CONFIGURATIONS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -237,18 +316,10 @@ DATASETS = {
         "path": "juliet/processed/raw_cleaned.jsonl",
         "description": "Juliet Test Suite - Synthetic CWE examples",
     },
-    "codexglue": {
-        "path": "codexglue_defect/processed/raw_cleaned.jsonl",
-        "description": "CodeXGLUE - Defect detection dataset",
-    },
-    "github_ppakshad": {
-        "path": "github_ppakshad/processed/raw_cleaned.jsonl",
-        "description": "GitHub ppakshad vulnerability dataset",
-    },
-    "megavul": {
-        "path": "megavul/processed/raw_cleaned.jsonl",
-        "description": "MegaVul - Large-scale vulnerability dataset",
-    },
+    # "megavul": {
+    #     "path": "megavul/processed/raw_cleaned.jsonl",
+    #     "description": "MegaVul - Large-scale vulnerability dataset",
+    # },
 }
 
 # Chunked processing configuration (Kaggle optimization)
@@ -287,10 +358,10 @@ def load_and_normalize_dataset_streaming(
     Returns:
         Tuple of (normalized_records, statistics_dict)
     """
-    logger.info(f"📂 Loading {dataset_name} from {dataset_path}")
+    safe_log("info", f"📂 Loading {dataset_name} from {dataset_path}")
 
     if not dataset_path.exists():
-        logger.warning(f"⚠️  Dataset file not found: {dataset_path}")
+        safe_log("warning", f"⚠️  Dataset file not found: {dataset_path}")
         return [], {}
 
     # Setup per-dataset logging
@@ -322,7 +393,7 @@ def load_and_normalize_dataset_streaming(
             total_raw = len(raw_records_list)
             iterator = raw_records_list
 
-        logger.info(f"  → Read {total_raw:,} raw records from {dataset_name}")
+        safe_log("info", f"  → Read {total_raw:,} raw records from {dataset_name}")
 
         # Normalize records using schema_utils (canonical schema enforcer)
         for idx, record in enumerate(iterator):
@@ -361,20 +432,22 @@ def load_and_normalize_dataset_streaming(
                 records.append(unified_record)
 
             except Exception as e:
-                logger.debug(f"  ⚠️  Error processing record {idx}: {e}")
+                safe_log("debug", f"  ⚠️  Error processing record {idx}: {e}")
                 skipped += 1
                 errors.append(
                     {"dataset": dataset_name, "index": idx, "errors": [str(e)]}
                 )
 
         elapsed = time.time() - start_time
-        logger.info(
-            f"  ✅ Normalized {len(records):,} records from {dataset_name} in {elapsed:.2f}s"
+        safe_log(
+            "info",
+            f"  ✅ Normalized {len(records):,} records from {dataset_name} in {elapsed:.2f}s",
         )
 
         if skipped > 0:
-            logger.warning(
-                f"  ⚠️  Skipped {skipped:,} invalid/error records from {dataset_name}"
+            safe_log(
+                "warning",
+                f"  ⚠️  Skipped {skipped:,} invalid/error records from {dataset_name}",
             )
 
         # Generate per-dataset statistics
@@ -396,7 +469,7 @@ def load_and_normalize_dataset_streaming(
         }
 
     except Exception as e:
-        logger.error(f"  ❌ Failed to load {dataset_name}: {e}")
+        safe_log("error", f"  ❌ Failed to load {dataset_name}: {e}")
         return [], {}
 
     finally:
@@ -434,13 +507,13 @@ def parallel_normalize_datasets(
     all_records = []
     dataset_stats_list = []
 
-    logger.info(f"🚀 Starting parallel normalization with {max_workers} workers")
+    safe_log("info", f"🚀 Starting parallel normalization with {max_workers} workers")
 
     # Prepare tasks
     tasks = []
     for dataset_name in datasets_to_process:
         if dataset_name not in DATASETS:
-            logger.warning(f"⚠️  Unknown dataset: {dataset_name}")
+            safe_log("warning", f"⚠️  Unknown dataset: {dataset_name}")
             continue
 
         config = DATASETS[dataset_name]
@@ -473,9 +546,9 @@ def parallel_normalize_datasets(
                         f"  ✅ {dataset_name}: {len(records):,} records normalized"
                     )
                 else:
-                    logger.warning(f"  ⚠️  {dataset_name}: No records loaded")
+                    safe_log("warning", f"  ⚠️  {dataset_name}: No records loaded")
             except Exception as e:
-                logger.error(f"  ❌ {dataset_name} failed: {e}")
+                safe_log("error", f"  ❌ {dataset_name} failed: {e}")
 
     return all_records, dataset_stats_list
 
@@ -493,13 +566,13 @@ def save_normalized_dataset_streaming(
     """
     ensure_dir(str(output_path.parent))
 
-    logger.info(f"💾 Saving {len(records):,} records to {output_path}")
+    safe_log("info", f"💾 Saving {len(records):,} records to {output_path}")
 
     # Streaming write (chunked)
     write_jsonl(records, str(output_path))
 
     file_size = output_path.stat().st_size / (1024 * 1024)  # MB
-    logger.info(f"  ✅ Saved {dataset_name}: {file_size:.2f} MB")
+    safe_log("info", f"  ✅ Saved {dataset_name}: {file_size:.2f} MB")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -696,7 +769,7 @@ def generate_markdown_report(
         f.write("**Pipeline:** normalize_and_merge_v3.py\n")
         f.write("**Schema:** 17-field unified schema (schema_utils.py)\n")
 
-    logger.info(f"  📄 Markdown report saved to {output_path}")
+    safe_log("info", f"  📄 Markdown report saved to {output_path}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -712,19 +785,19 @@ def main():
         epilog="""
 Examples:
   # Full normalization + merge (all datasets)
-  python normalize_and_merge_v3.py --datasets devign zenodo diversevul --validate --summary
+  python normalize_and_merge.py --datasets devign zenodo diversevul --validate --summary
 
   # Quick test (100 records per dataset)
-  python normalize_and_merge_v3.py --quick-test --summary
+  python normalize_and_merge.py --quick-test --summary
 
   # Merge with deduplication
-  python normalize_and_merge_v3.py --datasets devign zenodo --deduplicate --summary
+  python normalize_and_merge.py --datasets devign zenodo --deduplicate --summary
 
   # Skip deduplication
-  python normalize_and_merge_v3.py --no-dedup --summary
+  python normalize_and_merge.py --no-dedup --summary
 
   # Custom output
-  python normalize_and_merge_v3.py --output my_merged_dataset.jsonl --summary
+  python normalize_and_merge.py --output my_merged_dataset.jsonl --summary
         """,
     )
 
@@ -782,6 +855,18 @@ Examples:
 
     args = parser.parse_args()
 
+    # Check dependencies and project structure for Kaggle compatibility
+    if not check_dependencies():
+        sys.exit(1)
+
+    if not check_project_structure():
+        sys.exit(1)
+
+    # Ensure we're in the project root directory
+    project_root = Path(__file__).parent.parent.parent
+    os.chdir(project_root)
+    safe_print(f"📂 Working directory set to: {os.getcwd()}")
+
     # Print header
     safe_print("\n" + "=" * 80)
     safe_print("CodeGuardian v3.0 - Normalization & Merging Pipeline")
@@ -797,6 +882,16 @@ Examples:
         print("📁 Input Base:  Unknown")
         print("💾 Output Base: Unknown")
         print("🗂️  Cache Base:  Unknown")
+
+    # Check dependencies
+    if not check_dependencies():
+        safe_print("❌ Missing dependencies. Please install them and retry.")
+        sys.exit(1)
+
+    # Check project structure
+    if not check_project_structure():
+        safe_print("❌ Incorrect project structure. Please fix and retry.")
+        sys.exit(1)
 
     # Determine deduplication setting
     enable_dedup = args.deduplicate and not args.no_dedup
@@ -837,10 +932,10 @@ Examples:
     log_dir = Path("logs") / "normalization"
     ensure_dir(str(log_dir))
 
-    logger.info(f"📁 Reading datasets from: {datasets_dir}")
-    logger.info(f"💾 Writing outputs to: {output_dir}")
-    logger.info(f"🎯 Schema: 17-field unified schema (schema_utils.py)")
-    logger.info(f"🔄 Deduplication: {'ENABLED' if enable_dedup else 'DISABLED'}")
+    safe_log("info", f"📁 Reading datasets from: {datasets_dir}")
+    safe_log("info", f"💾 Writing outputs to: {output_dir}")
+    safe_log("info", f"🎯 Schema: 17-field unified schema (schema_utils.py)")
+    safe_log("info", f"🔄 Deduplication: {'ENABLED' if enable_dedup else 'DISABLED'}")
     logger.info(
         f"✅ Validation: {'ENABLED' if args.validate else 'DISABLED (fast mode)'}"
     )
@@ -932,7 +1027,9 @@ Examples:
 
         # Save merged dataset
         merged_file = output_dir / args.output
-        logger.info(f"💾 Saving {len(all_records):,} merged records to {merged_file}")
+        safe_log(
+            "info", f"💾 Saving {len(all_records):,} merged records to {merged_file}"
+        )
         write_jsonl(all_records, str(merged_file))
 
         file_size = merged_file.stat().st_size / (1024 * 1024)  # MB
@@ -988,6 +1085,42 @@ Examples:
     else:
         logger.error("❌ No records were processed. Check your dataset paths.")
         sys.exit(1)
+
+
+def check_dependencies():
+    """Check if required dependencies are available."""
+    missing = []
+
+    try:
+        import tqdm
+    except ImportError:
+        missing.append("tqdm")
+
+    try:
+        import rich
+    except ImportError:
+        missing.append("rich")
+
+    if missing:
+        safe_print(f"❌ Missing dependencies: {', '.join(missing)}")
+        safe_print("Install with: !pip install " + " ".join(missing))
+        return False
+
+    safe_print("✅ All dependencies available")
+    return True
+
+
+def check_project_structure():
+    """Check if the project structure is correct."""
+    required_files = ["scripts/utils/schema_utils.py", "scripts/utils/io_utils.py"]
+
+    for file_path in required_files:
+        if not Path(file_path).exists():
+            safe_print(f"❌ Missing required file: {file_path}")
+            return False
+
+    safe_print("✅ Project structure OK")
+    return True
 
 
 if __name__ == "__main__":
