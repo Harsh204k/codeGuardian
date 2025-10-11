@@ -999,23 +999,28 @@ Examples:
         dataset_name = stats["dataset"]
         dataset_records = [r for r in all_records if r.get("dataset") == dataset_name]
 
-        # On Kaggle, save to /kaggle/working instead of read-only /kaggle/input
-        if str(datasets_dir).startswith("/kaggle/input"):
-            normalized_dir = (
-                Path("/kaggle/working/datasets") / dataset_name / "normalized"
+        try:
+            # On Kaggle, save to /kaggle/working instead of read-only /kaggle/input
+            if str(datasets_dir).startswith("/kaggle/input"):
+                normalized_dir = (
+                    Path("/kaggle/working/datasets") / dataset_name / "normalized"
+                )
+            else:
+                normalized_dir = datasets_dir / dataset_name / "normalized"
+
+            normalized_file = normalized_dir / "normalized.jsonl"
+
+            save_normalized_dataset_streaming(
+                dataset_records, normalized_file, dataset_name
             )
-        else:
-            normalized_dir = datasets_dir / dataset_name / "normalized"
 
-        normalized_file = normalized_dir / "normalized.jsonl"
-
-        save_normalized_dataset_streaming(
-            dataset_records, normalized_file, dataset_name
-        )
-
-        # Save per-dataset stats
-        stats_file = normalized_dir / "stats.json"
-        write_json(stats, str(stats_file))
+            # Save per-dataset stats
+            stats_file = normalized_dir / "stats.json"
+            write_json(stats, str(stats_file))
+        except Exception as e:
+            logger.error(f"❌ Failed to save {dataset_name} outputs: {e}")
+            logger.error(f"   Attempted path: {normalized_dir}")
+            # Continue with other datasets instead of exiting
 
     # ═══════════════════════════════════════════════════════════════════════
     # PHASE 2: DEDUPLICATION (Optional)
@@ -1061,51 +1066,77 @@ Examples:
         logger.info(f"  ✅ Merged dataset saved: {file_size:.2f} MB")
 
         # Generate overall statistics using schema_utils
-        unified_stats = generate_unified_stats(all_records)
-        stats_file = output_dir / "merge_summary.json"
-        write_json(unified_stats, str(stats_file))
-        logger.info(f"  📊 Overall statistics saved to {stats_file}")
+        try:
+            unified_stats = generate_unified_stats(all_records)
+            stats_file = output_dir / "merge_summary.json"
+            write_json(unified_stats, str(stats_file))
+            logger.info(f"  📊 Overall statistics saved to {stats_file}")
+        except Exception as e:
+            logger.error(f"❌ Failed to generate statistics: {e}")
+            # Create minimal stats to continue
+            unified_stats = {
+                "total_records": len(all_records),
+                "vulnerable_records": sum(
+                    1 for r in all_records if r.get("is_vulnerable") == 1
+                ),
+                "non_vulnerable_records": sum(
+                    1 for r in all_records if r.get("is_vulnerable") == 0
+                ),
+                "unique_languages": len(
+                    set(r.get("language", "unknown") for r in all_records)
+                ),
+                "unique_cwes": len(
+                    set(r.get("cwe_id") for r in all_records if r.get("cwe_id"))
+                ),
+                "vulnerability_ratio": 0.0,
+            }
 
         # Generate Markdown report
-        report_file = output_dir / "merge_report.md"
-        generate_markdown_report(
-            unified_stats, dataset_stats_list, dedup_stats, report_file
-        )
+        try:
+            report_file = output_dir / "merge_report.md"
+            generate_markdown_report(
+                unified_stats, dataset_stats_list, dedup_stats, report_file
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to generate markdown report: {e}")
 
         # ═══════════════════════════════════════════════════════════════════
         # FINAL SUMMARY
         # ═══════════════════════════════════════════════════════════════════
 
-        print("\n" + "═" * 80)
-        print("✅ NORMALIZATION & MERGING COMPLETE")
-        print("═" * 80)
+        safe_print("\n" + "=" * 80)
+        safe_print("✅ NORMALIZATION & MERGING COMPLETE")
+        safe_print("=" * 80)
 
         if args.summary:
             print_summary_table(dataset_stats_list, unified_stats)
 
-        print(f"\n📊 OVERALL STATISTICS:")
-        print(f"  • Total records: {unified_stats['total_records']:,}")
-        print(
+        safe_print(f"\n📊 OVERALL STATISTICS:")
+        safe_print(f"  • Total records: {unified_stats['total_records']:,}")
+        safe_print(
             f"  • Vulnerable: {unified_stats['vulnerable_records']:,} ({unified_stats.get('vulnerability_ratio', 0):.2%})"
         )
-        print(f"  • Safe: {unified_stats['non_vulnerable_records']:,}")
-        print(f"  • Datasets: {len(dataset_stats_list)}")
-        print(f"  • Languages: {unified_stats['unique_languages']}")
-        print(f"  • CWEs: {unified_stats['unique_cwes']}")
-        print(f"  • Processing time: {phase1_time:.2f}s")
+        safe_print(f"  • Safe: {unified_stats['non_vulnerable_records']:,}")
+        safe_print(f"  • Datasets: {len(dataset_stats_list)}")
+        safe_print(f"  • Languages: {unified_stats['unique_languages']}")
+        safe_print(f"  • CWEs: {unified_stats['unique_cwes']}")
+        safe_print(f"  • Processing time: {phase1_time:.2f}s")
 
         if enable_dedup:
-            print(f"\n🔄 DEDUPLICATION:")
-            print(f"  • Duplicates removed: {dedup_stats.get('total_removed', 0):,}")
+            safe_print(f"\n🔄 DEDUPLICATION:")
+            safe_print(
+                f"  • Duplicates removed: {dedup_stats.get('total_removed', 0):,}"
+            )
 
-        print(f"\n💾 OUTPUT FILES:")
-        print(f"  • {merged_file}")
-        print(f"  • {stats_file}")
-        print(f"  • {report_file}")
+        safe_print(f"\n💾 OUTPUT FILES:")
+        safe_print(f"  • {merged_file}")
+        safe_print(f"  • {stats_file}")
+        if "report_file" in locals():
+            safe_print(f"  • {report_file}")
 
-        print("\n" + "═" * 80)
-        print("🎯 READY FOR FEATURE ENGINEERING")
-        print("═" * 80 + "\n")
+        safe_print("\n" + "=" * 80)
+        safe_print("🎯 READY FOR FEATURE ENGINEERING")
+        safe_print("=" * 80 + "\n")
 
     else:
         logger.error("❌ No records were processed. Check your dataset paths.")
