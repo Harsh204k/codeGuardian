@@ -6,7 +6,16 @@
 
 # Input/Output Directories
 # ----------------------------------------------------------------------------
-raw_dataset_dir: "/kaggle/input/megavul/"
+# ==============================================================================
+# INPUT/OUTPUT PATHS
+# ==============================================================================
+
+# Raw dataset directory (Kaggle)
+# Update this to match your Kaggle dataset path!
+# Common paths:
+#   - /kaggle/input/codeguardian-datasets/megavul  (if dataset name has hyphens)
+#   - /kaggle/input/megavul  (if dataset is named 'megavul')
+raw_dataset_dir: "/kaggle/input/codeguardian-datasets/megavul"
 output_dir: "/kaggle/working/megavul_processed/"
 drive_mount_dir: "/content/drive/MyDrive/codeGuardian/MegaVulProcessed/"
 

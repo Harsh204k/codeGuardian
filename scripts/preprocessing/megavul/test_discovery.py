@@ -15,16 +15,28 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from megavul_file_discovery import discover_megavul_files, estimate_total_records
 
-# Test with the kaggle path from your screenshots
-test_path = Path("c:/Users/urvag/Downloads/Projects/Hackathon/DPIIT/codeGuardian/datasets/megavul")
+# Test with multiple possible paths
+possible_paths = [
+    Path("/kaggle/input/codeguardian-datasets/megavul"),  # Kaggle dataset
+    Path("/kaggle/input/megavul"),  # Alternative Kaggle path
+    Path("c:/Users/urvag/Downloads/Projects/Hackathon/DPIIT/codeGuardian/datasets/megavul"),  # Local
+    Path("../../../datasets/megavul"),  # Relative path
+]
 
-# If that doesn't exist, try the actual kaggle path
-if not test_path.exists():
-    test_path = Path("/kaggle/input/megavul")
+test_path = None
+for path in possible_paths:
+    if path.exists():
+        test_path = path
+        print(f"✅ Found dataset at: {test_path}")
+        break
 
-if not test_path.exists():
-    print(f"❌ Test path not found: {test_path}")
-    print("Please update the path in this script to point to your MegaVul dataset")
+if test_path is None:
+    print(f"❌ Dataset not found in any of these locations:")
+    for path in possible_paths:
+        print(f"   - {path}")
+    print("\n💡 Based on your Kaggle screenshot, the path should be:")
+    print("   /kaggle/input/codeguardian-datasets/megavul")
+    print("\nPlease verify the dataset is mounted in your Kaggle notebook.")
     sys.exit(1)
 
 print(f"🔍 Testing file discovery on: {test_path}\n")
