@@ -906,7 +906,7 @@ Examples:
         # /kaggle/input/<dataset-folder>/...
         kaggle_input = Path("/kaggle/input")
         kaggle_dataset_root = kaggle_input / "codeguardian-pre-processed-datasets"
-        kaggle_dataset_alt = kaggle_input / "codeguardian-datasets"
+        kaggle_dataset_alt = kaggle_input / "codeguardian-preprocessed-datasets"
 
         if kaggle_input.exists() and kaggle_dataset_root.exists():
             datasets_dir = kaggle_dataset_root.resolve()
@@ -929,7 +929,11 @@ Examples:
     if args.output_dir:
         output_dir = Path(args.output_dir).resolve()
     else:
-        output_dir = datasets_dir / "final"
+        # On Kaggle, /kaggle/input is read-only, so write to /kaggle/working
+        if str(datasets_dir).startswith("/kaggle/input"):
+            output_dir = Path("/kaggle/working/datasets/final")
+        else:
+            output_dir = datasets_dir / "final"
 
     ensure_dir(str(output_dir))
 
@@ -950,6 +954,15 @@ Examples:
     logger.info(
         f"📋 Processing {len(datasets_to_process)} datasets: {', '.join(datasets_to_process)}"
     )
+    
+    # Debug: Check if dataset files exist
+    logger.info("\n🔍 Checking dataset availability:")
+    for dataset in datasets_to_process:
+        dataset_file = datasets_dir / DATASETS[dataset]["path"]
+        if dataset_file.exists():
+            logger.info(f"  ✅ Found: {dataset} at {dataset_file}")
+        else:
+            logger.warning(f"  ❌ Missing: {dataset} at {dataset_file}")
 
     # Quick test mode
     max_records = 100 if args.quick_test else None
