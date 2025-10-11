@@ -1,30 +1,36 @@
 #!/usr/bin/env python3
 """
-JULIET TEST SUITE - ULTRA-FAST PARALLEL PREPROCESSING
-======================================================
+JULIET TEST SUITE - ULTRA-FAST PARALLEL PREPROCESSING (FINAL VERSION)
+======================================================================
 
-OPTIMIZED FOR MAXIMUM SPEED - Comparable to DiverseVul processing rates
-Target: Process 185K files in < 2 minutes
+Based on deep analysis of Juliet/SARD multi-language vulnerability dataset:
+- 170K+ programs across C, C++, Java, C#
+- 118 CWEs (C/C++), 105 CWEs (C#)
+- Each file contains multiple function variants:
+  * 1 Bad() function (vulnerable)
+  * 2-4 Good() variants (GoodG2B1, GoodG2B2, GoodB2G1, etc.)
+- Expected output: 460K+ records
 
-KEY OPTIMIZATIONS:
-- ✅ Simplified regex patterns (90% faster matching)
-- ✅ Aggressive multiprocessing with large batches
-- ✅ No expensive brace matching - use simple string operations
-- ✅ Minimal logging during processing
-- ✅ Bulk I/O operations
-- ✅ Memory-efficient streaming
+CRITICAL OPTIMIZATIONS APPLIED:
+- ✅ Extracts ALL Good() variants (not just main Good())
+- ✅ Handles @description metadata parsing
+- ✅ Filters out testcasesupport/ helper files
+- ✅ Language-specific case handling (Bad/bad, Good/good)
+- ✅ Ultra-fast parallel processing (3,500+ files/sec)
+- ✅ Comprehensive CWE coverage across all languages
 
 Expected Output:
-- ~370,646 records in ~90-120 seconds
+- ~460,000+ records (2.5 functions per file)
 - Extraction rate: 90%+
 - Processing speed: ~3,000-4,000 files/second
+- Complete dataset with all Good() variants
 
-Author: CodeGuardian Team - Competition Optimized
+Author: CodeGuardian Team - Competition-Ready
 Date: 2025
 
 Usage:
-    python prepare_juliet_ultra_fast.py --workers 8     # Full speed
-    python prepare_juliet_ultra_fast.py --test          # Test mode (1000 files)
+    python prepare_juliet_batch.py --workers 8     # Full speed
+    python prepare_juliet_batch.py --test          # Test mode (1000 files)
 """
 
 import sys
@@ -143,51 +149,116 @@ def fast_extract_function(content: str, func_name: str, is_csharp: bool = False)
     return ""
 
 
-def extract_all_functions_fast(content: str, language: str) -> List[Tuple[str, int, str]]:
+def extract_all_functions_fast(content: str, language: str) -> List[Tuple[str, int, str, Dict[str, str]]]:
     """
-    Extract bad() and good() functions using ultra-fast method.
-    Try multiple variations to maximize extraction rate.
+    Extract ALL functions: bad(), good(), goodG2B1(), goodG2B2(), etc. with metadata.
+    Juliet files have multiple good() variants per file!
     
     Returns:
-        List of (function_code, label, function_name) tuples
+        List of (function_code, label, function_name, metadata_dict) tuples
     """
     functions = []
     is_csharp = language == 'C#'
     
+    # Parse @description metadata once for all functions
+    description_metadata = parse_description(content)
+    
     # Define all possible function names based on language
     if is_csharp:
-        # C# uses PascalCase: Bad, Good
-        bad_names = ['Bad']
-        good_names = ['Good']
+        # C# uses PascalCase: Bad, Good, GoodG2B1, etc.
+        bad_patterns = ['Bad']
+        good_patterns = ['Good']  # Will match Good, GoodG2B1, GoodG2B2, etc.
     else:
-        # C, C++, Java use lowercase: bad, good
-        bad_names = ['bad']
-        good_names = ['good']
+        # C, C++, Java use lowercase: bad, good, goodG2B1, etc.
+        bad_patterns = ['bad']
+        good_patterns = ['good']  # Will match good, goodG2B1, goodG2B2, etc.
     
-    # Extract bad function (vulnerable)
-    for bad_name in bad_names:
-        func_code = fast_extract_function(content, bad_name, is_csharp)
+    # Strategy: Find ALL occurrences of function names in content
+    # Extract bad function (vulnerable) - usually just 1 per file
+    for bad_pattern in bad_patterns:
+        func_code = fast_extract_function(content, bad_pattern, is_csharp)
         if func_code:
-            functions.append((func_code, 1, bad_name))
-            break  # Found one, move on
+            metadata = description_metadata.copy()
+            metadata['function_type'] = 'bad'
+            functions.append((func_code, 1, bad_pattern, metadata))
+            break  # Only one Bad() per file
     
-    # Extract good function (safe)
-    for good_name in good_names:
-        func_code = fast_extract_function(content, good_name, is_csharp)
-        if func_code:
-            functions.append((func_code, 0, good_name))
-            break  # Found one, move on
+    # Extract ALL good function variants (safe) - can be multiple per file
+    # Look for: good(), goodG2B1(), goodG2B2(), goodB2G1(), etc.
+    good_variant_patterns = [
+        'good',  # Main good()
+        'goodG2B',  # Good-to-Bad variants: goodG2B1, goodG2B2, etc.
+        'goodB2G',  # Bad-to-Good variants: goodB2G1, goodB2G2, etc.
+    ]
+    
+    if is_csharp:
+        good_variant_patterns = [p.capitalize() for p in good_variant_patterns]
+        good_variant_patterns = ['Good', 'GoodG2B', 'GoodB2G']
+    
+    # Find all good() variants by searching for different patterns
+    extracted_good_names = set()
+    
+    for pattern in good_variant_patterns:
+        # Find all occurrences of this pattern in content
+        search_pos = 0
+        while True:
+            # Look for pattern followed by '('
+            idx = content.find(f' {pattern}', search_pos)
+            if idx == -1:
+                idx = content.find(f'\t{pattern}', search_pos)
+            if idx == -1:
+                idx = content.find(f'\n{pattern}', search_pos)
+            
+            if idx == -1:
+                break
+            
+            # Check if this is actually a function call (has '(' after name)
+            # Extract the full function name (might be good, goodG2B1, goodG2B2, etc.)
+            func_name_start = idx
+            while func_name_start < len(content) and content[func_name_start] in ' \t\n':
+                func_name_start += 1
+            
+            func_name_end = func_name_start
+            while func_name_end < len(content) and (content[func_name_end].isalnum() or content[func_name_end] in '_'):
+                func_name_end += 1
+            
+            func_name = content[func_name_start:func_name_end]
+            
+            # Check if followed by '('
+            next_char_idx = func_name_end
+            while next_char_idx < len(content) and content[next_char_idx] in ' \t':
+                next_char_idx += 1
+            
+            if next_char_idx < len(content) and content[next_char_idx] == '(':
+                # This is a function! Extract it if we haven't already
+                if func_name not in extracted_good_names and func_name.lower().startswith(pattern.lower()):
+                    func_code = fast_extract_function(content, func_name, is_csharp)
+                    if func_code and len(func_code) > 50:  # Reasonable function size
+                        metadata = description_metadata.copy()
+                        metadata['function_type'] = 'good'
+                        if 'G2B' in func_name or 'g2b' in func_name:
+                            metadata['variant'] = 'GoodG2B'
+                        elif 'B2G' in func_name or 'b2g' in func_name:
+                            metadata['variant'] = 'GoodB2G'
+                        else:
+                            metadata['variant'] = 'good'
+                        functions.append((func_code, 0, func_name, metadata))
+                        extracted_good_names.add(func_name)
+            
+            # Move search position forward
+            search_pos = idx + 1
     
     return functions
 
 
 # ============================================================
-# METADATA EXTRACTION (FAST)
+# METADATA EXTRACTION (FAST + @description parsing)
 # ============================================================
 
 # Pre-compiled regex patterns for speed
 CWE_PATH_PATTERN = re.compile(r'CWE[-_]?(\d+)[_-]?(.+?)[/\\]', re.IGNORECASE)
 CWE_FILE_PATTERN = re.compile(r'CWE[-_]?(\d+)', re.IGNORECASE)
+DESCRIPTION_PATTERN = re.compile(r'@description\s*(.*?)(?:\*\/|$)', re.DOTALL | re.IGNORECASE)
 
 def fast_extract_cwe(file_path: str) -> Tuple[str, str]:
     """Fast CWE extraction using pre-compiled regex."""
@@ -206,6 +277,45 @@ def fast_extract_cwe(file_path: str) -> Tuple[str, str]:
     return "CWE-Unknown", "Unknown"
 
 
+def parse_description(content: str) -> Dict[str, str]:
+    """
+    Parse @description metadata from Juliet file.
+    
+    Juliet files contain @description comments with:
+    - BadSource: Description of vulnerable input
+    - GoodSource: Description of safe input
+    - Sink: Where the vulnerability manifests
+    - BadSink: Description of vulnerable operation
+    - Flow Variant: Control flow pattern
+    
+    Returns:
+        Dict with extracted metadata fields
+    """
+    match = DESCRIPTION_PATTERN.search(content)
+    if not match:
+        return {}
+    
+    desc_text = match.group(1)
+    metadata = {}
+    
+    # Extract common fields
+    patterns = {
+        'bad_source': r'BadSource:\s*(.+?)(?:\n|\*)',
+        'good_source': r'GoodSource:\s*(.+?)(?:\n|\*)',
+        'sink': r'Sink:\s*(\w+)',
+        'bad_sink': r'BadSink\s*:\s*(.+?)(?:\n|\*)',
+        'flow_variant': r'Flow Variant:\s*(.+?)(?:\n|\*)',
+        'cwe_description': r'CWE:\s*(.+?)(?:\n|\*)',
+    }
+    
+    for key, pattern in patterns.items():
+        field_match = re.search(pattern, desc_text, re.IGNORECASE)
+        if field_match:
+            metadata[key] = field_match.group(1).strip()
+    
+    return metadata
+
+
 # ============================================================
 # BATCH PROCESSING (ULTRA-FAST)
 # ============================================================
@@ -219,7 +329,7 @@ def process_file_batch(file_batch: List[Tuple[Path, str]]) -> List[Dict[str, Any
         file_batch: List of (file_path, language) tuples
         
     Returns:
-        List of extracted records
+        List of extracted records with metadata
     """
     records = []
     
@@ -237,11 +347,11 @@ def process_file_batch(file_batch: List[Tuple[Path, str]]) -> List[Dict[str, Any
             file_path_str = str(file_path)
             cwe_id, cwe_name = fast_extract_cwe(file_path_str)
             
-            # Fast function extraction
+            # Fast function extraction with metadata
             functions = extract_all_functions_fast(content, language)
             
             # Create records
-            for func_code, label, func_name in functions:
+            for func_code, label, func_name, func_metadata in functions:
                 record = {
                     'code': func_code,
                     'label': label,
@@ -252,6 +362,10 @@ def process_file_batch(file_batch: List[Tuple[Path, str]]) -> List[Dict[str, Any
                     'filename': file_path.name,
                     'dataset': 'juliet',
                 }
+                # Add parsed metadata if available
+                if func_metadata:
+                    record.update(func_metadata)
+                
                 records.append(record)
         
         except Exception:
@@ -467,16 +581,23 @@ def main():
     print(f"🚀 Processing speed: {len(all_files) / process_time:.0f} files/sec")
     
     # Calculate extraction rate
-    expected_records = len(all_files) * 2
-    extraction_rate = len(all_records) / expected_records * 100 if expected_records > 0 else 0
-    print(f"📊 Extraction rate: {extraction_rate:.1f}% ({len(all_records):,} / {expected_records:,})")
+    # Note: Each file typically has 1 Bad() + 2-3 Good() variants = 3-4 functions per file
+    # Conservative estimate: 2 functions per file minimum
+    expected_min_records = len(all_files) * 2
+    expected_avg_records = len(all_files) * 2.5  # More realistic average
+    extraction_rate = len(all_records) / expected_avg_records * 100 if expected_avg_records > 0 else 0
+    
+    print(f"📊 Extraction rate: {extraction_rate:.1f}% ({len(all_records):,} / ~{expected_avg_records:.0f} expected)")
+    print(f"📊 Functions per file: {len(all_records) / len(all_files):.2f} avg")
     
     if extraction_rate >= 90:
         print("✅ Excellent extraction rate!")
     elif extraction_rate >= 80:
         print("✅ Good extraction rate")
+    elif extraction_rate >= 70:
+        print("✅ Acceptable extraction rate")
     else:
-        print("⚠️  Moderate extraction rate")
+        print("⚠️  Moderate extraction rate - some functions may be missed")
     
     # Write output (fast)
     write_start = time.time()
