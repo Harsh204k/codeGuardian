@@ -906,9 +906,13 @@ Examples:
         # /kaggle/input/<dataset-folder>/...
         kaggle_input = Path("/kaggle/input")
         kaggle_dataset_root = kaggle_input / "codeguardian-pre-processed-datasets"
+        kaggle_dataset_alt = kaggle_input / "codeguardian-datasets"
 
         if kaggle_input.exists() and kaggle_dataset_root.exists():
             datasets_dir = kaggle_dataset_root.resolve()
+            logger.info(f"Detected Kaggle input datasets at: {datasets_dir}")
+        elif kaggle_input.exists() and kaggle_dataset_alt.exists():
+            datasets_dir = kaggle_dataset_alt.resolve()
             logger.info(f"Detected Kaggle input datasets at: {datasets_dir}")
         elif kaggle_input.exists():
             # If /kaggle/input contains a single folder, assume that's the root.
