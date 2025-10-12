@@ -913,25 +913,54 @@ Examples:
         # work when run inside a Kaggle notebook where datasets are mounted at
         # /kaggle/input/<dataset-folder>/...
         kaggle_input = Path("/kaggle/input")
-        kaggle_dataset_root = kaggle_input / "codeguardian-pre-processed-datasets"
-        kaggle_dataset_alt = kaggle_input / "codeguardian-preprocessed-datasets"
 
-        if kaggle_input.exists() and kaggle_dataset_root.exists():
-            datasets_dir = kaggle_dataset_root.resolve()
-            logger.info(f"Detected Kaggle input datasets at: {datasets_dir}")
-        elif kaggle_input.exists() and kaggle_dataset_alt.exists():
-            datasets_dir = kaggle_dataset_alt.resolve()
-            logger.info(f"Detected Kaggle input datasets at: {datasets_dir}")
-        elif kaggle_input.exists():
-            # If /kaggle/input contains a single folder, assume that's the root.
-            subdirs = [p for p in kaggle_input.iterdir() if p.is_dir()]
-            if len(subdirs) == 1:
-                datasets_dir = subdirs[0].resolve()
-                logger.info(f"Detected single Kaggle dataset folder: {datasets_dir}")
-            else:
-                # Fallback to project helper which uses local repo layout
-                datasets_dir = get_dataset_path("")
-        else:
+        # Try multiple possible dataset folder names
+        possible_names = [
+            "codeguardian-pre-processed-datasets",
+            "codeguardian-preprocessed-datasets",
+            "codeguardian-datasets",  # Added this variant
+            "codeguardian-data",
+        ]
+
+        datasets_dir = None
+
+        if kaggle_input.exists():
+            # Try each possible dataset folder name
+            for folder_name in possible_names:
+                candidate = kaggle_input / folder_name
+                if candidate.exists():
+                    datasets_dir = candidate.resolve()
+                    safe_log(
+                        "info", f"✅ Detected Kaggle input datasets at: {datasets_dir}"
+                    )
+                    break
+
+            # If none of the known names found, check for a single subfolder
+            if not datasets_dir:
+                subdirs = [p for p in kaggle_input.iterdir() if p.is_dir()]
+                if len(subdirs) == 1:
+                    datasets_dir = subdirs[0].resolve()
+                    safe_log(
+                        "info",
+                        f"✅ Detected single Kaggle dataset folder: {datasets_dir}",
+                    )
+                elif len(subdirs) > 1:
+                    # List all available folders for debugging
+                    folder_list = ", ".join([p.name for p in subdirs])
+                    safe_log(
+                        "warning",
+                        f"⚠️ Multiple folders found in /kaggle/input: {folder_list}",
+                    )
+                    safe_log("warning", f"⚠️ Please specify --datasets-dir explicitly")
+                    safe_print(f"❌ Error: Could not auto-detect dataset folder")
+                    safe_print(f"Available folders: {folder_list}")
+                    sys.exit(1)
+                else:
+                    safe_log("error", "❌ No dataset folders found in /kaggle/input")
+                    sys.exit(1)
+
+        # Fallback to local project layout
+        if not datasets_dir:
             datasets_dir = get_dataset_path("")
 
     if args.output_dir:
@@ -967,12 +996,62 @@ Examples:
 
     # Debug: Check if dataset files exist
     logger.info("\n🔍 Checking dataset availability:")
+    missing_datasets = []
     for dataset in datasets_to_process:
         dataset_file = datasets_dir / DATASETS[dataset]["path"]
         if dataset_file.exists():
             logger.info(f"  ✅ Found: {dataset} at {dataset_file}")
         else:
             logger.warning(f"  ❌ Missing: {dataset} at {dataset_file}")
+            missing_datasets.append(dataset)
+
+    # If all datasets are missing, provide helpful error message
+    if len(missing_datasets) == len(datasets_to_process):
+        safe_print("\n" + "=" * 80)
+        safe_print("❌ ERROR: No dataset files found!")
+        safe_print("=" * 80)
+        safe_print(f"📁 Looking in: {datasets_dir}")
+        safe_print(f"📋 Expected datasets: {', '.join(datasets_to_process)}")
+        safe_print("\n💡 Possible solutions:")
+        safe_print("  1. Check that your Kaggle dataset is mounted correctly")
+        safe_print("  2. Verify the dataset folder structure:")
+        safe_print(f"     {datasets_dir}/devign/processed/raw_cleaned.jsonl")
+        safe_print(f"     {datasets_dir}/zenodo/processed/raw_cleaned.jsonl")
+        safe_print("  3. Use --datasets-dir to specify the correct path")
+        safe_print("\n📂 Current directory structure:")
+        if datasets_dir.exists():
+            try:
+                for item in datasets_dir.iterdir():
+                    if item.is_dir():
+                        safe_print(f"     📁 {item.name}/")
+                        # Show one level deeper
+                        for subitem in item.iterdir():
+                            if subitem.is_dir():
+                                safe_print(f"        📁 {subitem.name}/")
+            except Exception as e:
+                safe_print(f"     (Could not list: {e})")
+        else:
+            safe_print(f"     ❌ Directory does not exist: {datasets_dir}")
+        safe_print("=" * 80 + "\n")
+        sys.exit(1)
+
+    # If some datasets are missing, warn but continue
+    if missing_datasets:
+        safe_log(
+            "warning",
+            f"⚠️ Skipping {len(missing_datasets)} missing datasets: {', '.join(missing_datasets)}",
+        )
+        datasets_to_process = [
+            d for d in datasets_to_process if d not in missing_datasets
+        ]
+        safe_log(
+            "info",
+            f"✅ Proceeding with {len(datasets_to_process)} available datasets: {', '.join(datasets_to_process)}",
+        )
+
+        if len(datasets_to_process) == 0:
+            safe_print("❌ No datasets available to process. Exiting.")
+            sys.exit(1)
 
     # Quick test mode
     max_records = 100 if args.quick_test else None
