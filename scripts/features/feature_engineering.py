@@ -680,10 +680,10 @@ def calculate_ratios(metrics: Dict[str, Any]) -> Dict[str, float]:
 def _extract_features_worker(record: Dict[str, Any]) -> Dict[str, Any]:
     """
     Worker function for multiprocessing - NO LOGGER to avoid pickling errors.
-    
+
     Args:
         record: Input record with code field
-        
+
     Returns:
         Record enriched with all features
     """
@@ -1073,22 +1073,28 @@ def main():
     if args.input:
         input_path = args.input
     else:
-        input_path = get_dataset_path("validated/validated.jsonl")
+        input_path = str(get_dataset_path("validated/validated.jsonl"))
 
     if args.output_csv:
         output_csv_path = args.output_csv
     else:
-        output_csv_path = get_output_path("features/features_static.csv")
+        # Get directory and append filename
+        output_dir = get_output_path("features")
+        output_csv_path = str(output_dir / "features_static.csv")
 
     if args.output_parquet:
         output_parquet_path = args.output_parquet
     else:
-        output_parquet_path = get_output_path("features/features_static.parquet")
+        # Get directory and append filename
+        output_dir = get_output_path("features")
+        output_parquet_path = str(output_dir / "features_static.parquet")
 
     if args.stats:
         stats_path = args.stats
     else:
-        stats_path = get_output_path("features/stats_features.json")
+        # Get directory and append filename
+        output_dir = get_output_path("features")
+        stats_path = str(output_dir / "stats_features.json")
 
     logger.info(f"[INFO] Reading input from: {input_path}")
     logger.info(f"[INFO] Writing features to: {output_csv_path}")
