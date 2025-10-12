@@ -32,9 +32,9 @@ PIPELINE STAGES:
 
 OUTPUT STRUCTURE:
 - datasets/<dataset>/normalized/normalized.jsonl (per-dataset)
-- datasets/final/merged_normalized.jsonl (unified dataset)
-- datasets/final/merge_summary.json (comprehensive stats)
-- datasets/final/merge_report.md (Markdown audit report)
+- datasets/merged/merged_normalized.jsonl (unified dataset)
+- datasets/merged/merge_summary.json (comprehensive stats)
+- datasets/merged/merge_report.md (Markdown audit report)
 - logs/normalization/<dataset>.log (per-dataset logs)
 
 PERFORMANCE OPTIMIZATIONS FOR KAGGLE:
@@ -830,7 +830,7 @@ Examples:
         "--output-dir",
         type=str,
         default=None,
-        help="Output directory (default: datasets/final/)",
+        help="Output directory (default: datasets/merged/)",
     )
     parser.add_argument(
         "--deduplicate", action="store_true", help="Enable deduplication by code hash"
@@ -968,9 +968,9 @@ Examples:
     else:
         # On Kaggle, /kaggle/input is read-only, so write to /kaggle/working
         if str(datasets_dir).startswith("/kaggle/input"):
-            output_dir = Path("/kaggle/working/datasets/final")
+            output_dir = Path("/kaggle/working/datasets/merged")
         else:
-            output_dir = datasets_dir / "final"
+            output_dir = datasets_dir / "merged"
 
     ensure_dir(str(output_dir))
 

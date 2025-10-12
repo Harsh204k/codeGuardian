@@ -851,8 +851,8 @@ def main():
         ]
         found = None
         for entry in Path("/kaggle/input").iterdir():
-            # check final/ inside each mounted dataset
-            final_dir = entry / "final"
+            # check merged/ inside each mounted dataset
+            final_dir = entry / "merged"
             if final_dir.exists() and final_dir.is_dir():
                 for name in scan_candidates:
                     cand = final_dir / name
@@ -873,7 +873,7 @@ def main():
     input_path_obj = Path(input_path)
     if input_path_obj.exists() and input_path_obj.suffix.lower() == ".json":
         # create working destination
-        working_dst = Path("/kaggle/working/datasets/final/merged_normalized.jsonl")
+        working_dst = Path("/kaggle/working/datasets/merged/merged_normalized.jsonl")
         working_dst.parent.mkdir(parents=True, exist_ok=True)
         # Only convert if destination doesn't exist or is older
         try:
