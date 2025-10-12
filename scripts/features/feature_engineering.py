@@ -36,6 +36,7 @@ import re
 import math
 import csv
 import sys
+import shutil
 import warnings
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -1096,6 +1097,12 @@ def main():
         output_dir = get_output_path("features")
         stats_path = str(output_dir / "stats_features.json")
 
+    # Clean up any incorrectly created directories from previous runs
+    for path in [output_csv_path, output_parquet_path, stats_path, args.output_jsonl]:
+        if path and Path(path).is_dir():
+            logger.warning(f"Removing incorrectly created directory: {path}")
+            shutil.rmtree(path)
+    
     logger.info(f"[INFO] Reading input from: {input_path}")
     logger.info(f"[INFO] Writing features to: {output_csv_path}")
     logger.info(f"[INFO] Writing statistics to: {stats_path}")
