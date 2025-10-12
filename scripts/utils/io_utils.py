@@ -477,11 +477,12 @@ def chunked_read_jsonl(
     chunk = []
     records_read = 0
 
-    # Determine if file is gzipped
-    is_gzipped = file_path.endswith(".gz")
+    # Determine if file is gzipped - convert Path to string
+    file_path_str = str(file_path)
+    is_gzipped = file_path_str.endswith(".gz")
     open_func = gzip.open if is_gzipped else open
 
-    with open_func(file_path, "rt", encoding="utf-8") as f:
+    with open_func(file_path_str, "rt", encoding="utf-8") as f:
         iterator = tqdm(f, total=total_lines, desc="Reading") if show_progress else f
 
         for line in iterator:
@@ -533,17 +534,18 @@ def chunked_write_jsonl(
     """
     logger.info(f"Writing JSONL in chunks to {output_path}")
 
-    # Ensure output directory exists
-    ensure_dir(os.path.dirname(output_path))
+    # Ensure output directory exists - convert Path to string
+    output_path_str = str(output_path)
+    ensure_dir(os.path.dirname(output_path_str))
 
     # Add .gz extension if compressing
-    if compress and not output_path.endswith(".gz"):
-        output_path += ".gz"
+    if compress and not output_path_str.endswith(".gz"):
+        output_path_str += ".gz"
 
     open_func = gzip.open if compress else open
     total_records = 0
 
-    with open_func(output_path, "wt", encoding="utf-8") as f:
+    with open_func(output_path_str, "wt", encoding="utf-8") as f:
         for chunk in (
             tqdm(chunk_iterator, desc="Writing chunks")
             if show_progress
@@ -554,7 +556,7 @@ def chunked_write_jsonl(
                 f.write("\n")
                 total_records += 1
 
-    logger.info(f"Successfully wrote {total_records} records to {output_path}")
+    logger.info(f"Successfully wrote {total_records} records to {output_path_str}")
 
 
 def stream_process(
@@ -835,4 +837,4 @@ def parallel_process_files(
         if show_progress
     )
 
-    return results # type: ignore
+    return results  # type: ignore
