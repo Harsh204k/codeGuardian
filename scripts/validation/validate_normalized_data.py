@@ -816,6 +816,92 @@ def main():
         unified_dir = get_output_path("unified")
         input_path = str(unified_dir / "processed_all.jsonl")
 
+    # If user provided a directory (common in Kaggle), try to auto-detect merged file
+    input_path_obj = Path(input_path)
+    if input_path_obj.is_dir():
+        # Look for common merged filenames
+        candidates = [
+            input_path_obj / "merged_normalized.jsonl",
+            input_path_obj / "merged_normalized.json",
+            input_path_obj / "merged.jsonl",
+            input_path_obj / "merged.json",
+        ]
+        found = None
+        for c in candidates:
+            if c.exists():
+                found = c
+                break
+        if not found:
+            logger.error(f"No merged file found in directory: {input_path_obj}")
+            logger.error(f"Checked: {', '.join(str(p.name) for p in candidates)}")
+            sys.exit(1)
+        input_path = str(found)
+
+    # If the input path does not exist (user passed a non-existent dir), try scanning /kaggle/input
+    input_path_obj = Path(input_path)
+    if not input_path_obj.exists() and Path("/kaggle/input").exists():
+        logger.info(
+            f"Input path {input_path} not found — scanning /kaggle/input for merged files..."
+        )
+        scan_candidates = [
+            "merged_normalized.jsonl",
+            "merged_normalized.json",
+            "merged.jsonl",
+            "merged.json",
+        ]
+        found = None
+        for entry in Path("/kaggle/input").iterdir():
+            # check final/ inside each mounted dataset
+            final_dir = entry / "final"
+            if final_dir.exists() and final_dir.is_dir():
+                for name in scan_candidates:
+                    cand = final_dir / name
+                    if cand.exists():
+                        found = cand
+                        logger.info(f"Auto-detected merged file at: {found}")
+                        break
+            if found:
+                break
+        if not found:
+            logger.error(
+                "Could not auto-detect merged file under /kaggle/input. Please pass --input pointing to the merged file or its directory."
+            )
+            sys.exit(1)
+        input_path = str(found)
+
+    # If input is a .json array file (not newline-delimited), convert to JSONL in /kaggle/working
+    input_path_obj = Path(input_path)
+    if input_path_obj.exists() and input_path_obj.suffix.lower() == ".json":
+        # create working destination
+        working_dst = Path("/kaggle/working/datasets/final/merged_normalized.jsonl")
+        working_dst.parent.mkdir(parents=True, exist_ok=True)
+        # Only convert if destination doesn't exist or is older
+        try:
+            convert_required = True
+            if working_dst.exists():
+                # if dst newer than src, skip
+                if working_dst.stat().st_mtime >= input_path_obj.stat().st_mtime:
+                    convert_required = False
+            if convert_required:
+                import json as _json
+
+                with (
+                    input_path_obj.open("rt", encoding="utf-8") as inf,
+                    working_dst.open("wt", encoding="utf-8") as outf,
+                ):
+                    data = _json.load(inf)
+                    if isinstance(data, dict):
+                        outf.write(_json.dumps(data, ensure_ascii=False) + "\n")
+                    else:
+                        for obj in data:
+                            outf.write(_json.dumps(obj, ensure_ascii=False) + "\n")
+                logger.info(f"Converted JSON -> JSONL: {working_dst}")
+        except Exception as e:
+            logger.error(f"Failed to convert JSON to JSONL: {e}")
+            sys.exit(1)
+        # point input_path to working dst
+        input_path = str(working_dst)
+
     if args.output:
         output_path = args.output
     else:
