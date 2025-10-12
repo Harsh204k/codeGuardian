@@ -251,6 +251,41 @@ def write_csv(
     logger.info(f"Successfully wrote CSV file")
 
 
+def write_parquet(
+    records: List[Dict[str, Any]],
+    output_path: str,
+    compression: str = "snappy",
+):
+    """
+    Write records to Parquet file.
+
+    Args:
+        records: List of dictionaries to write
+        output_path: Path to output Parquet file
+        compression: Compression algorithm (snappy, gzip, brotli, none)
+    """
+    if not PARQUET_AVAILABLE:
+        logger.error("pyarrow not available, cannot write parquet file")
+        raise ImportError("pyarrow is required for parquet support")
+
+    logger.info(f"Writing {len(records)} records to Parquet: {output_path}")
+
+    if not records:
+        logger.warning("No records to write")
+        return
+
+    # Ensure output directory exists
+    ensure_dir(os.path.dirname(output_path))
+
+    try:
+        table = pa.Table.from_pylist(records)
+        pq.write_table(table, output_path, compression=compression)
+        logger.info(f"Successfully wrote Parquet file")
+    except Exception as e:
+        logger.error(f"Failed to write Parquet file: {e}")
+        raise
+
+
 def count_lines(file_path: str) -> int:
     """
     Count the number of lines in a file.
@@ -800,4 +835,4 @@ def parallel_process_files(
         if show_progress
     )
 
-    return results
+    return results # type: ignore
