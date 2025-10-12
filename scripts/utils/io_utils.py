@@ -46,10 +46,10 @@ logger = logging.getLogger(__name__)
 def _ensure_str_path(path: Union[str, Path]) -> str:
     """
     Convert Path objects to strings for compatibility.
-    
+
     Args:
         path: File path as string or Path object
-        
+
     Returns:
         String representation of the path
     """
