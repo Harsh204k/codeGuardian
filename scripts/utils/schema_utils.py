@@ -1,18 +1,24 @@
 """
-🎯 CANONICAL SCHEMA ENFORCER - Single Source of Truth
+🎯 CANONICAL SCHEMA ENFORCER - Single Source of Truth (Stage III Enhanced)
 CodeGuardian Unified Schema Management & Field Mapping
 
 This module is the authoritative schema definition for the entire CodeGuardian project.
 It ensures 100% consistency between dataset normalization, merging, and ML feature engineering.
 
 Core Features:
-✅ Unified 17-field schema (aligned with normalize_and_merge_all.py)
+✅ Unified 31-field schema (17 base + 14 Stage III enhancements)
 ✅ Automatic CWE → attack_type/severity enrichment
 ✅ Field normalization (language, CWE, CVE, labels)
 ✅ Provenance tracking (source_file, source_row_index)
 ✅ Deduplication by code hash (SHA-256)
 ✅ Validation (manual + jsonschema)
 ✅ CLI test mode for compliance verification
+
+Stage III Enhancements:
+✅ Granularity: vuln_line_start/end, context_before/after
+✅ Traceability: repo_url, commit_url, code_sha256
+✅ Function Metadata: function_length, num_params, num_calls, imports
+✅ Versioning: normalized_timestamp, language_stage, verification_source
 
 Schema Alignment:
 - This module defines the schema used by normalize_and_merge_all.py
@@ -21,8 +27,8 @@ Schema Alignment:
 - Full traceability for competition scoring
 
 Author: CodeGuardian Team
-Version: 2.0.0 - Competition Ready
-Date: 2025-10-11
+Version: 3.0.0 - Stage III Production Ready
+Date: 2025-10-12
 """
 
 import sys
@@ -51,7 +57,7 @@ except ImportError:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 🎯 FINAL UNIFIED SCHEMA (100% Aligned with normalize_and_merge_all.py)
+# 🎯 FINAL UNIFIED SCHEMA (Enhanced with Granularity & Metadata)
 # ═══════════════════════════════════════════════════════════════════════════
 
 UNIFIED_SCHEMA = {
@@ -80,6 +86,26 @@ UNIFIED_SCHEMA = {
     # Traceability (for debugging and audit)
     "source_file": Optional[str],  # Original input file path
     "source_row_index": Optional[int],  # Row number in source file
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🚀 STAGE III ENHANCEMENTS - Granularity & Traceability Fields
+    # ═══════════════════════════════════════════════════════════════════════
+    "vuln_line_start": Optional[int],  # Starting line number of vulnerability
+    "vuln_line_end": Optional[int],  # Ending line number of vulnerability
+    "context_before": Optional[str],  # Code context before vulnerability (3-5 lines)
+    "context_after": Optional[str],  # Code context after vulnerability (3-5 lines)
+    "repo_url": Optional[str],  # GitHub/GitLab repository URL
+    "commit_url": Optional[str],  # Direct URL to commit
+    "function_length": Optional[int],  # Total lines in function
+    "num_params": Optional[int],  # Number of function parameters
+    "num_calls": Optional[int],  # Number of function calls in code
+    "imports": Optional[str],  # Comma-separated list of imports/includes
+    "code_sha256": Optional[str],  # SHA-256 hash of code for deduplication
+    "normalized_timestamp": Optional[str],  # ISO 8601 normalization timestamp
+    "language_stage": Optional[str],  # Language version (e.g., "C11", "Python 3.8")
+    "verification_source": Optional[
+        str
+    ],  # How vulnerability was verified (e.g., "manual", "automated", "CVE")
+    "source_dataset_version": Optional[str],  # Version of original dataset
 }
 
 
@@ -113,6 +139,22 @@ JSONSCHEMA_DEFINITION = {
         "commit_id": {"type": ["string", "null"]},
         "source_file": {"type": ["string", "null"]},
         "source_row_index": {"type": ["integer", "null"]},
+        # Stage III fields
+        "vuln_line_start": {"type": ["integer", "null"]},
+        "vuln_line_end": {"type": ["integer", "null"]},
+        "context_before": {"type": ["string", "null"]},
+        "context_after": {"type": ["string", "null"]},
+        "repo_url": {"type": ["string", "null"]},
+        "commit_url": {"type": ["string", "null"]},
+        "function_length": {"type": ["integer", "null"]},
+        "num_params": {"type": ["integer", "null"]},
+        "num_calls": {"type": ["integer", "null"]},
+        "imports": {"type": ["string", "null"]},
+        "code_sha256": {"type": ["string", "null"]},
+        "normalized_timestamp": {"type": ["string", "null"]},
+        "language_stage": {"type": ["string", "null"]},
+        "verification_source": {"type": ["string", "null"]},
+        "source_dataset_version": {"type": ["string", "null"]},
     },
     "required": ["id", "language", "dataset", "code", "is_vulnerable"],
     "additionalProperties": False,
@@ -331,6 +373,244 @@ def generate_unique_id(dataset: str, index: int, additional_info: str = "") -> s
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 🚀 STAGE III HELPER FUNCTIONS - Granularity & Metadata Extraction
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def compute_code_hash(code: str) -> str:
+    """
+    Compute SHA-256 hash of code for robust deduplication.
+
+    Args:
+        code: Source code string
+
+    Returns:
+        SHA-256 hash (hex digest)
+    """
+    if not code:
+        return hashlib.sha256(b"").hexdigest()
+
+    # Normalize whitespace for consistent hashing
+    normalized = " ".join(code.split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def extract_context_lines(
+    code: str,
+    vuln_line_start: Optional[int],
+    vuln_line_end: Optional[int],
+    context_size: int = 3,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract code context before and after vulnerability lines.
+
+    Args:
+        code: Full source code
+        vuln_line_start: Starting line of vulnerability (1-indexed)
+        vuln_line_end: Ending line of vulnerability (1-indexed)
+        context_size: Number of lines to extract (default: 3)
+
+    Returns:
+        Tuple of (context_before, context_after) or (None, None)
+    """
+    if not code or not vuln_line_start:
+        return None, None
+
+    lines = code.split("\n")
+    total_lines = len(lines)
+
+    # Convert to 0-indexed
+    start_idx = vuln_line_start - 1
+    end_idx = (vuln_line_end or vuln_line_start) - 1
+
+    # Extract context before
+    context_before = None
+    if start_idx > 0:
+        before_start = max(0, start_idx - context_size)
+        context_before = "\n".join(lines[before_start:start_idx])
+
+    # Extract context after
+    context_after = None
+    if end_idx < total_lines - 1:
+        after_end = min(total_lines, end_idx + 1 + context_size)
+        context_after = "\n".join(lines[end_idx + 1 : after_end])
+
+    return context_before, context_after
+
+
+def infer_vuln_lines(
+    code: str, description: Optional[str] = None
+) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Attempt to infer vulnerability line numbers from code structure.
+
+    This is a heuristic-based approach for datasets without explicit line numbers.
+
+    Args:
+        code: Source code
+        description: Optional vulnerability description for hints
+
+    Returns:
+        Tuple of (vuln_line_start, vuln_line_end) or (None, None)
+    """
+    if not code:
+        return None, None
+
+    lines = code.split("\n")
+
+    # Simple heuristic: Look for common vulnerability patterns
+    vuln_keywords = [
+        "strcpy",
+        "strcat",
+        "sprintf",
+        "gets",  # C buffer overflows
+        "eval",
+        "exec",  # Code injection
+        "innerHTML",
+        "document.write",  # XSS
+        "system",
+        "shell_exec",  # Command injection
+        "SELECT",
+        "INSERT",
+        "UPDATE",  # SQL patterns
+    ]
+
+    # Find first line with vulnerability keyword
+    for idx, line in enumerate(lines, start=1):
+        for keyword in vuln_keywords:
+            if keyword in line:
+                # Return line range (single line by default)
+                return idx, idx
+
+    # If no pattern found, return None
+    return None, None
+
+
+def infer_function_metadata(code: str, language: str) -> Dict[str, Any]:
+    """
+    Extract function metadata from code (length, params, calls, imports).
+
+    Args:
+        code: Source code
+        language: Programming language
+
+    Returns:
+        Dictionary with function_length, num_params, num_calls, imports
+    """
+    metadata = {
+        "function_length": 0,
+        "num_params": 0,
+        "num_calls": 0,
+        "imports": None,
+    }
+
+    if not code:
+        return metadata
+
+    lines = code.split("\n")
+    metadata["function_length"] = len(lines)
+
+    # Language-specific patterns
+    if language in ["C", "C++", "Java"]:
+        # Count parameters (simplified: count commas in function signature)
+        func_sig_match = re.search(r"\(([^)]*)\)", code)
+        if func_sig_match:
+            params = func_sig_match.group(1)
+            if params.strip():
+                metadata["num_params"] = params.count(",") + 1
+
+        # Count function calls (simplified: count opening parentheses after identifiers)
+        metadata["num_calls"] = len(re.findall(r"\w+\s*\(", code))
+
+        # Extract includes/imports
+        includes = re.findall(r'#include\s*[<"]([^>"]+)[>"]', code)
+        if includes:
+            metadata["imports"] = ",".join(includes)
+
+    elif language == "Python":
+        # Count parameters
+        func_match = re.search(r"def\s+\w+\s*\(([^)]*)\)", code)
+        if func_match:
+            params = func_match.group(1)
+            if params.strip():
+                # Split by comma, filter out 'self'
+                param_list = [
+                    p.strip()
+                    for p in params.split(",")
+                    if p.strip() and p.strip() != "self"
+                ]
+                metadata["num_params"] = len(param_list)
+
+        # Count function calls
+        metadata["num_calls"] = len(re.findall(r"\w+\s*\(", code))
+
+        # Extract imports
+        imports = re.findall(
+            r"^(?:from\s+[\w.]+\s+)?import\s+([\w,\s.]+)", code, re.MULTILINE
+        )
+        if imports:
+            metadata["imports"] = ",".join([imp.strip() for imp in imports])
+
+    elif language == "JavaScript":
+        # Count parameters
+        func_match = re.search(r"function\s+\w+\s*\(([^)]*)\)", code) or re.search(
+            r"\(([^)]*)\)\s*=>", code
+        )
+        if func_match:
+            params = func_match.group(1)
+            if params.strip():
+                metadata["num_params"] = params.count(",") + 1
+
+        # Count function calls
+        metadata["num_calls"] = len(re.findall(r"\w+\s*\(", code))
+
+        # Extract imports
+        imports = re.findall(r"import\s+.*?from\s+['\"]([^'\"]+)['\"]", code)
+        requires = re.findall(r"require\s*\(['\"]([^'\"]+)['\"]\)", code)
+        all_imports = imports + requires
+        if all_imports:
+            metadata["imports"] = ",".join(all_imports)
+
+    return metadata
+
+
+def build_commit_url(
+    project: Optional[str], commit_id: Optional[str], repo_url: Optional[str] = None
+) -> Optional[str]:
+    """
+    Build direct commit URL from project/commit information.
+
+    Args:
+        project: Project/repository name
+        commit_id: Git commit hash
+        repo_url: Optional base repository URL
+
+    Returns:
+        Direct URL to commit or None
+    """
+    if not commit_id:
+        return None
+
+    if repo_url:
+        # Append commit hash to repo URL
+        if "github.com" in repo_url:
+            return f"{repo_url.rstrip('/')}/commit/{commit_id}"
+        elif "gitlab.com" in repo_url:
+            return f"{repo_url.rstrip('/')}/-/commit/{commit_id}"
+
+    if project and ("/" in project or "github" in project.lower()):
+        # Try to construct GitHub URL
+        clean_project = (
+            project.replace("https://", "")
+            .replace("http://", "")
+            .replace("github.com/", "")
+        )
+        return f"https://github.com/{clean_project}/commit/{commit_id}"
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 🎯 CORE SCHEMA MAPPING FUNCTION
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -343,10 +623,16 @@ def map_to_unified_schema(
     source_file: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Map a dataset-specific record to the unified schema with CWE enrichment.
+    Map a dataset-specific record to the unified schema with CWE enrichment and Stage III enhancements.
 
     This is the canonical mapping function that ensures 100% consistency
     with normalize_and_merge_all.py.
+
+    Stage III Enhancements:
+    - Granularity: vuln_line_start/end, context_before/after
+    - Traceability: repo_url, commit_url, code_sha256
+    - Metadata: function_length, num_params, num_calls, imports
+    - Versioning: normalized_timestamp, language_stage, verification_source
 
     Args:
         record: Original record from dataset
@@ -356,7 +642,7 @@ def map_to_unified_schema(
         source_file: Original file path for traceability
 
     Returns:
-        Record conforming to unified schema (17 fields)
+        Record conforming to unified schema (31 fields: 17 base + 14 Stage III)
     """
     if field_mapping is None:
         field_mapping = {}
@@ -477,6 +763,88 @@ def map_to_unified_schema(
             unified_record["review_status"] = attack_info.get("review_status")
         except Exception as e:
             logger.debug(f"CWE enrichment failed for {unified_record['cwe_id']}: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🚀 STAGE III ENHANCEMENTS - Populate Granularity & Metadata Fields
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # Extract or infer vulnerability line numbers
+    vuln_line_start = (
+        get_field("vuln_line_start")
+        or get_field("line_start")
+        or get_field("start_line")
+    )
+    vuln_line_end = (
+        get_field("vuln_line_end") or get_field("line_end") or get_field("end_line")
+    )
+
+    # If not provided, try to infer from code
+    if not vuln_line_start and code:
+        vuln_line_start, vuln_line_end = infer_vuln_lines(code, description)
+
+    # Extract code context
+    context_before, context_after = extract_context_lines(
+        code, vuln_line_start, vuln_line_end
+    )
+
+    # Get or build repository URLs
+    repo_url = get_field("repo_url") or get_field("repository_url") or get_field("url")
+    commit_url = get_field("commit_url") or build_commit_url(
+        unified_record.get("project"), unified_record.get("commit_id"), repo_url
+    )
+
+    # Extract function metadata
+    func_metadata = infer_function_metadata(code, language)
+
+    # Compute code hash for deduplication
+    code_hash = compute_code_hash(code)
+
+    # Get normalized timestamp (current time if not provided)
+    normalized_timestamp = (
+        get_field("normalized_timestamp") or datetime.now(timezone.utc).isoformat()
+    )
+
+    # Get language version/stage
+    language_stage = get_field("language_stage") or get_field("language_version")
+
+    # Get verification source
+    verification_source = get_field("verification_source")
+    if not verification_source:
+        # Infer from available fields
+        if cve_id:
+            verification_source = "CVE"
+        elif cwe_id:
+            verification_source = "CWE"
+        else:
+            verification_source = "dataset"
+
+    # Get dataset version
+    source_dataset_version = (
+        get_field("source_dataset_version")
+        or get_field("version")
+        or get_field("dataset_version")
+    )
+
+    # Add Stage III fields to unified record
+    unified_record.update(
+        {
+            "vuln_line_start": vuln_line_start,
+            "vuln_line_end": vuln_line_end,
+            "context_before": context_before,
+            "context_after": context_after,
+            "repo_url": repo_url,
+            "commit_url": commit_url,
+            "function_length": func_metadata.get("function_length"),
+            "num_params": func_metadata.get("num_params"),
+            "num_calls": func_metadata.get("num_calls"),
+            "imports": func_metadata.get("imports"),
+            "code_sha256": code_hash,
+            "normalized_timestamp": normalized_timestamp,
+            "language_stage": language_stage,
+            "verification_source": verification_source,
+            "source_dataset_version": source_dataset_version,
+        }
+    )
 
     return unified_record
 

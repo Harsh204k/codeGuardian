@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-🚀 COMPETITION-GRADE NORMALIZATION & MERGING PIPELINE v3.0 🚀
-Kaggle-Optimized + Full Schema-Utils Integration
+🚀 COMPETITION-GRADE NORMALIZATION & MERGING PIPELINE v3.1 - Stage III Enhanced 🚀
+Kaggle-Optimized + Full Schema-Utils Integration + Granularity/Traceability
 
 This script provides a production-grade, Kaggle-optimized data unification pipeline:
 
 KEY FEATURES:
 ✅ Full integration with schema_utils.py (canonical schema enforcer)
+✅ Stage III enhancements: 31-field unified schema (17 base + 14 granularity/metadata fields)
 ✅ Automatic CWE → attack_type/severity enrichment via schema_utils
 ✅ Parallel dataset processing for speed (ThreadPoolExecutor)
 ✅ Streaming I/O for memory efficiency (chunked reads/writes)
@@ -15,9 +16,15 @@ KEY FEATURES:
 ✅ Comprehensive validation and error recovery
 ✅ Traceability (source_file, source_row_index, merge_timestamp)
 
+STAGE III ENHANCEMENTS:
+✅ Granularity: vuln_line_start/end, context_before/after (code context extraction)
+✅ Traceability: repo_url, commit_url, code_sha256 (full provenance)
+✅ Function Metadata: function_length, num_params, num_calls, imports (automated extraction)
+✅ Versioning: normalized_timestamp, language_stage, verification_source
+
 PIPELINE STAGES:
 1. Load raw_cleaned.jsonl from each dataset
-2. Normalize via schema_utils.map_to_unified_schema() (17 fields)
+2. Normalize via schema_utils.map_to_unified_schema() (31 fields with Stage III)
 3. Validate records (optional lightweight checks)
 4. Deduplicate across datasets
 5. Merge into single unified dataset with timestamp
@@ -54,8 +61,8 @@ CLI USAGE:
     python normalize_and_merge.py --output merged_output.jsonl --summary
 
 Author: CodeGuardian Team
-Version: 3.0.0 - Kaggle-Optimized + Schema-Utils Integration
-Date: 2025-10-11
+Version: 3.1.0 - Stage III Production Ready
+Date: 2025-10-12
 """
 
 import sys
@@ -102,7 +109,7 @@ try:
 
     SCHEMA_UTILS_AVAILABLE = True
     logger_temp = logging.getLogger(__name__)
-    logger_temp.info("✅ schema_utils.py integrated successfully (17-field schema)")
+    logger_temp.info("✅ schema_utils.py integrated successfully (31-field schema)")
 except ImportError as e:
     SCHEMA_UTILS_AVAILABLE = False
     logger_temp = logging.getLogger(__name__)
@@ -780,11 +787,11 @@ def generate_markdown_report(
 def main():
     """Main pipeline entry point."""
     parser = argparse.ArgumentParser(
-        description="CodeGuardian v3.0 - Kaggle-Optimized Normalization & Merging Pipeline",
+        description="CodeGuardian v3.1 - Stage III Kaggle-Optimized Normalization & Merging Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full normalization + merge (all datasets)
+  # Full normalization + merge (all datasets with Stage III fields)
   python normalize_and_merge.py --datasets devign zenodo diversevul --validate --summary
 
   # Quick test (100 records per dataset)
@@ -870,8 +877,9 @@ Examples:
 
     # Print header
     safe_print("\n" + "=" * 80)
-    safe_print("CodeGuardian v3.0 - Normalization & Merging Pipeline")
+    safe_print("CodeGuardian v3.1 - Normalization & Merging Pipeline (Stage III)")
     safe_print("   Kaggle-Optimized + Full schema_utils.py Integration")
+    safe_print("   31-field unified schema with granularity & metadata")
     safe_print("=" * 80)
 
     # Detect environment and print info
@@ -943,7 +951,9 @@ Examples:
 
     safe_log("info", f"📁 Reading datasets from: {datasets_dir}")
     safe_log("info", f"💾 Writing outputs to: {output_dir}")
-    safe_log("info", f"🎯 Schema: 17-field unified schema (schema_utils.py)")
+    safe_log(
+        "info", f"🎯 Schema: 31-field unified schema (17 base + 14 Stage III fields)"
+    )
     safe_log("info", f"🔄 Deduplication: {'ENABLED' if enable_dedup else 'DISABLED'}")
     logger.info(
         f"✅ Validation: {'ENABLED' if args.validate else 'DISABLED (fast mode)'}"
