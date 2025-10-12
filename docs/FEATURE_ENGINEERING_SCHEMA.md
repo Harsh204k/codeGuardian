@@ -56,7 +56,7 @@ enriched = {
     "verification_source": ...,     # ✅ PRESERVED
     "source_dataset_version": ...,  # ✅ PRESERVED
     "merge_timestamp": ...,         # ✅ PRESERVED
-    
+
     # ═══ PLUS 32+ NEW COMPUTED FEATURES ═══
     "loc": ...,
     "cyclomatic_complexity": ...,
@@ -267,6 +267,6 @@ print("✅ All fields present!")
 
 ---
 
-**Version:** 3.3.0  
-**Date:** 2025-10-12  
+**Version:** 3.3.0
+**Date:** 2025-10-12
 **Status:** ✅ Production Ready

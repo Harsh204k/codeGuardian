@@ -693,7 +693,7 @@ def calculate_ratios(metrics: Dict[str, Any]) -> Dict[str, float]:
 def _extract_features_worker(record: Dict[str, Any]) -> Dict[str, Any]:
     """
     Worker function for multiprocessing - NO LOGGER to avoid pickling errors.
-    
+
     IMPORTANT: This function preserves ALL fields from validated.jsonl and ADDS new features.
 
     Args:
@@ -710,31 +710,25 @@ def _extract_features_worker(record: Dict[str, Any]) -> Dict[str, Any]:
         "id": record.get("id", ""),
         "language": record.get("language", ""),
         "dataset": record.get("dataset", ""),
-        
         # Code and vulnerability
         "code": code,
         "is_vulnerable": record.get("is_vulnerable", 0),
-        
         # Vulnerability metadata
         "cwe_id": record.get("cwe_id", ""),
         "cve_id": record.get("cve_id", ""),
         "description": record.get("description", ""),
-        
         # CWE-enriched fields
         "attack_type": record.get("attack_type", ""),
         "severity": record.get("severity", ""),
         "review_status": record.get("review_status", ""),
-        
         # Provenance tracking
         "func_name": record.get("func_name", ""),
         "file_name": record.get("file_name", ""),
         "project": record.get("project", ""),
         "commit_id": record.get("commit_id", ""),
-        
         # Traceability
         "source_file": record.get("source_file", ""),
         "source_row_index": record.get("source_row_index", ""),
-        
         # Stage III enhancements
         "vuln_line_start": record.get("vuln_line_start", ""),
         "vuln_line_end": record.get("vuln_line_end", ""),
@@ -758,7 +752,7 @@ def _extract_features_worker(record: Dict[str, Any]) -> Dict[str, Any]:
         # ═══════════════════════════════════════════════════════════════
         # ✨ ADD NEW COMPUTED FEATURES (32+ features)
         # ═══════════════════════════════════════════════════════════════
-        
+
         # 1. Basic code metrics (9 features)
         code_metrics = extract_code_metrics(code)
         enriched.update(code_metrics)
@@ -814,7 +808,7 @@ def extract_all_features(
 ) -> Dict[str, Any]:
     """
     Extract all features from a single record (with logging support).
-    
+
     ✅ Preserves ALL 32 schema fields from validated.jsonl
     ✅ Adds 32+ new computed features
 
