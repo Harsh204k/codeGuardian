@@ -945,10 +945,13 @@ def process_dataset_to_csv(
             f"✅ CSV written: {output_csv_path} ({len(df)} records, {len(df.columns)} features)"
         )
 
-        # 2. Parquet output (optimized)
+        # 2. Parquet output (optimized) - use pandas native method
         if output_parquet_path:
-            write_parquet(df, output_parquet_path)  # type: ignore
-            logger.info(f"✅ Parquet written: {output_parquet_path}")
+            try:
+                df.to_parquet(output_parquet_path, index=False, compression='snappy')
+                logger.info(f"✅ Parquet written: {output_parquet_path}")
+            except Exception as e:
+                logger.warning(f"Failed to write Parquet (non-critical): {e}")
     else:
         # Fallback to manual CSV writing
         if all_features:
@@ -1102,7 +1105,7 @@ def main():
         if path and Path(path).is_dir():
             logger.warning(f"Removing incorrectly created directory: {path}")
             shutil.rmtree(path)
-    
+
     logger.info(f"[INFO] Reading input from: {input_path}")
     logger.info(f"[INFO] Writing features to: {output_csv_path}")
     logger.info(f"[INFO] Writing statistics to: {stats_path}")
