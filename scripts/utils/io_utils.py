@@ -43,6 +43,19 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _ensure_str_path(path: Union[str, Path]) -> str:
+    """
+    Convert Path objects to strings for compatibility.
+    
+    Args:
+        path: File path as string or Path object
+        
+    Returns:
+        String representation of the path
+    """
+    return str(path) if isinstance(path, Path) else path
+
+
 def ensure_dir(directory: str):
     """
     Ensure that a directory exists, create if it doesn't.
@@ -291,11 +304,12 @@ def count_lines(file_path: str) -> int:
     Count the number of lines in a file.
 
     Args:
-        file_path: Path to file
+        file_path: Path to file (string or Path object)
 
     Returns:
         Number of lines
     """
+    file_path = _ensure_str_path(file_path)
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         return sum(1 for _ in f)
 
@@ -464,6 +478,9 @@ def chunked_read_jsonl(
     """
     logger.info(f"Reading JSONL in chunks: {file_path} (chunk_size={chunk_size})")
 
+    # Convert Path to string for compatibility
+    file_path = _ensure_str_path(file_path)
+
     # Count total lines for progress bar
     total_lines = None
     if show_progress:
@@ -477,12 +494,11 @@ def chunked_read_jsonl(
     chunk = []
     records_read = 0
 
-    # Determine if file is gzipped - convert Path to string
-    file_path_str = str(file_path)
-    is_gzipped = file_path_str.endswith(".gz")
+    # Determine if file is gzipped
+    is_gzipped = file_path.endswith(".gz")
     open_func = gzip.open if is_gzipped else open
 
-    with open_func(file_path_str, "rt", encoding="utf-8") as f:
+    with open_func(file_path, "rt", encoding="utf-8") as f:
         iterator = tqdm(f, total=total_lines, desc="Reading") if show_progress else f
 
         for line in iterator:
@@ -534,18 +550,20 @@ def chunked_write_jsonl(
     """
     logger.info(f"Writing JSONL in chunks to {output_path}")
 
-    # Ensure output directory exists - convert Path to string
-    output_path_str = str(output_path)
-    ensure_dir(os.path.dirname(output_path_str))
+    # Convert Path to string for compatibility
+    output_path = _ensure_str_path(output_path)
+
+    # Ensure output directory exists
+    ensure_dir(os.path.dirname(output_path))
 
     # Add .gz extension if compressing
-    if compress and not output_path_str.endswith(".gz"):
-        output_path_str += ".gz"
+    if compress and not output_path.endswith(".gz"):
+        output_path += ".gz"
 
     open_func = gzip.open if compress else open
     total_records = 0
 
-    with open_func(output_path_str, "wt", encoding="utf-8") as f:
+    with open_func(output_path, "wt", encoding="utf-8") as f:
         for chunk in (
             tqdm(chunk_iterator, desc="Writing chunks")
             if show_progress
@@ -556,7 +574,7 @@ def chunked_write_jsonl(
                 f.write("\n")
                 total_records += 1
 
-    logger.info(f"Successfully wrote {total_records} records to {output_path_str}")
+    logger.info(f"Successfully wrote {total_records} records to {output_path}")
 
 
 def stream_process(
