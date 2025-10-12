@@ -293,8 +293,8 @@ def extract_code_metrics(code: str) -> Dict[str, float]:
             "total_chars": total_chars,
             "whitespace_ratio": round(whitespace_ratio, 4),
         }
-    except Exception as e:
-        logger.warning(f"Error extracting code metrics: {e}")
+    except Exception:
+        # Silent fail - return defaults
         return {
             "loc": 0,
             "total_lines": 0,
@@ -360,8 +360,8 @@ def extract_lexical_features(code: str) -> Dict[str, int]:
             "operator_count": operator_count,
             "security_keyword_count": security_keyword_count,
         }
-    except Exception as e:
-        logger.warning(f"Error extracting lexical features: {e}")
+    except Exception:
+        # Silent fail - return defaults
         return {
             "keyword_count": 0,
             "identifier_count": 0,
@@ -408,8 +408,8 @@ def calculate_cyclomatic_complexity(code: str) -> int:
         complexity += code.count("?")  # Ternary operator
 
         return complexity
-    except Exception as e:
-        logger.warning(f"Error calculating cyclomatic complexity: {e}")
+    except Exception:
+        # Silent fail - return default
         return 1
 
 
@@ -435,8 +435,8 @@ def calculate_nesting_depth(code: str) -> int:
                 current_depth = max(0, current_depth - 1)
 
         return max_depth
-    except Exception as e:
-        logger.warning(f"Error calculating nesting depth: {e}")
+    except Exception:
+        # Silent fail - return default
         return 0
 
 
@@ -473,8 +473,8 @@ def calculate_ast_depth(code: str) -> int:
         ast_depth = max_indent // 4 + 1
 
         return ast_depth
-    except Exception as e:
-        logger.warning(f"Error calculating AST depth: {e}")
+    except Exception:
+        # Silent fail - return default
         return 1
 
 
@@ -490,8 +490,8 @@ def calculate_conditional_count(code: str) -> int:
         count += code.count("?")  # Ternary
 
         return count
-    except Exception as e:
-        logger.warning(f"Error calculating conditional count: {e}")
+    except Exception:
+        # Silent fail - return default
         return 0
 
 
@@ -507,8 +507,8 @@ def calculate_loop_count(code: str) -> int:
         count += len(re.findall(r"\bforeach\b", code_lower))
 
         return count
-    except Exception as e:
-        logger.warning(f"Error calculating loop count: {e}")
+    except Exception:
+        # Silent fail - return default
         return 0
 
 
@@ -541,8 +541,8 @@ def calculate_token_diversity(code: str) -> float:
         diversity = unique_tokens / total_tokens
 
         return round(diversity, 4)
-    except Exception as e:
-        logger.warning(f"Error calculating token diversity: {e}")
+    except Exception:
+        # Silent fail - return default
         return 0.0
 
 
@@ -577,8 +577,8 @@ def calculate_shannon_entropy(code: str) -> float:
                 entropy -= p * math.log2(p)
 
         return round(entropy, 4)
-    except Exception as e:
-        logger.warning(f"Error calculating Shannon entropy: {e}")
+    except Exception:
+        # Silent fail - return default
         return 0.0
 
 
@@ -611,8 +611,8 @@ def calculate_identifier_entropy(code: str) -> float:
                 entropy -= p * math.log2(p)
 
         return round(entropy, 4)
-    except Exception as e:
-        logger.warning(f"Error calculating identifier entropy: {e}")
+    except Exception:
+        # Silent fail - return default
         return 0.0
 
 
@@ -661,8 +661,8 @@ def calculate_ratios(metrics: Dict[str, Any]) -> Dict[str, float]:
         ratios["security_keyword_ratio"] = round(sec_kw / total_kw, 4)
 
         return ratios
-    except Exception as e:
-        logger.warning(f"Error calculating ratios: {e}")
+    except Exception:
+        # Silent fail - return defaults
         return {
             "comment_code_ratio": 0,
             "identifier_keyword_ratio": 0,
@@ -677,22 +677,16 @@ def calculate_ratios(metrics: Dict[str, Any]) -> Dict[str, float]:
 # ====================================================================
 
 
-def extract_all_features(
-    record: Dict[str, Any], validate_schema: bool = False
-) -> Dict[str, Any]:
+def _extract_features_worker(record: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract all features from a single record.
-
+    Worker function for multiprocessing - NO LOGGER to avoid pickling errors.
+    
     Args:
         record: Input record with code field
-        validate_schema: Whether to validate against unified schema (disabled for multiprocessing)
-
+        
     Returns:
         Record enriched with all features
     """
-    # Schema validation disabled for multiprocessing compatibility
-    # Validation should be done before feature extraction in preprocessing pipeline
-
     code = record.get("code", "")
 
     # Create copy of record with essential fields
@@ -733,11 +727,8 @@ def extract_all_features(
         enriched["has_cve"] = 1 if record.get("cve_id") else 0
         enriched["has_description"] = 1 if record.get("description") else 0
 
-    except Exception as e:
-        logger.error(
-            f"Error extracting features for record {enriched.get('id', 'unknown')}: {e}"
-        )
-        # Fill with default values for failed extraction
+    except Exception:
+        # Fill with default values for failed extraction (no logging to avoid pickling issues)
         default_features = {
             "cyclomatic_complexity": 1,
             "nesting_depth": 0,
@@ -754,6 +745,45 @@ def extract_all_features(
         enriched.update(default_features)
 
     return enriched
+
+
+def extract_all_features(
+    record: Dict[str, Any], validate_schema: bool = False
+) -> Dict[str, Any]:
+    """
+    Extract all features from a single record (with logging support).
+
+    Args:
+        record: Input record with code field
+        validate_schema: Whether to validate against unified schema (disabled for multiprocessing)
+
+    Returns:
+        Record enriched with all features
+    """
+    try:
+        return _extract_features_worker(record)
+    except Exception as e:
+        logger.error(
+            f"Error extracting features for record {record.get('id', 'unknown')}: {e}"
+        )
+        # Return minimal enriched record on error
+        return {
+            "id": record.get("id", ""),
+            "language": record.get("language", ""),
+            "is_vulnerable": record.get("is_vulnerable", 0),
+            "dataset": record.get("dataset", record.get("source_dataset", "")),
+            "cyclomatic_complexity": 1,
+            "nesting_depth": 0,
+            "ast_depth": 1,
+            "conditional_count": 0,
+            "loop_count": 0,
+            "token_diversity": 0.0,
+            "shannon_entropy": 0.0,
+            "identifier_entropy": 0.0,
+            "has_cwe": 0,
+            "has_cve": 0,
+            "has_description": 0,
+        }
 
 
 # ====================================================================
@@ -807,11 +837,11 @@ def process_dataset_to_csv(
     logger.info("=" * 80)
 
     # Ensure output directories
-    ensure_dir(Path(output_csv_path).parent) # type: ignore
+    ensure_dir(Path(output_csv_path).parent)  # type: ignore
     if output_parquet_path:
-        ensure_dir(Path(output_parquet_path).parent) # type: ignore
+        ensure_dir(Path(output_parquet_path).parent)  # type: ignore
     if output_jsonl_path:
-        ensure_dir(Path(output_jsonl_path).parent) # type: ignore
+        ensure_dir(Path(output_jsonl_path).parent)  # type: ignore
 
     # Initialize tracking
     stats = {
@@ -847,10 +877,9 @@ def process_dataset_to_csv(
             logger.info(
                 f"  Processing chunk {chunk_idx+1} with multiprocessing ({len(chunk)} records)..."
             )
-            # Disable schema validation for multiprocessing to avoid pickling errors
-            features = Parallel(n_jobs=n_jobs, backend='loky')(
-                delayed(extract_all_features)(record, False)
-                for record in chunk
+            # Use worker function without logger to avoid pickling errors
+            features = Parallel(n_jobs=n_jobs, backend="loky")(
+                delayed(_extract_features_worker)(record) for record in chunk
             )
         else:
             logger.info(f"  Processing chunk {chunk_idx+1} ({len(chunk)} records)...")
@@ -866,19 +895,19 @@ def process_dataset_to_csv(
             stats["total_records"] += 1
 
             # Count by dataset and language
-            dataset = feature.get("dataset", "unknown") # type: ignore
-            language = feature.get("language", "unknown") # type: ignore
+            dataset = feature.get("dataset", "unknown")  # type: ignore
+            language = feature.get("language", "unknown")  # type: ignore
             stats["dataset_counts"][dataset] += 1
             stats["language_counts"][language] += 1
 
             # Count vulnerabilities
-            if feature.get("is_vulnerable", 0) == 1: # type: ignore
+            if feature.get("is_vulnerable", 0) == 1:  # type: ignore
                 stats["vulnerability_counts"]["vulnerable"] += 1
             else:
                 stats["vulnerability_counts"]["safe"] += 1
 
             # Track feature statistics (numeric fields only)
-            for field, value in feature.items(): # type: ignore
+            for field, value in feature.items():  # type: ignore
                 if isinstance(value, (int, float)) and field not in [
                     "id",
                     "is_vulnerable",
@@ -917,7 +946,7 @@ def process_dataset_to_csv(
 
         # 2. Parquet output (optimized)
         if output_parquet_path:
-            write_parquet(df, output_parquet_path) # type: ignore
+            write_parquet(df, output_parquet_path)  # type: ignore
             logger.info(f"✅ Parquet written: {output_parquet_path}")
     else:
         # Fallback to manual CSV writing
@@ -931,7 +960,7 @@ def process_dataset_to_csv(
 
     # 3. JSONL output (optional)
     if output_jsonl_path and jsonl_chunks:
-        chunked_write_jsonl(output_jsonl_path, jsonl_chunks) # type: ignore
+        chunked_write_jsonl(output_jsonl_path, jsonl_chunks)  # type: ignore
         logger.info(f"✅ JSONL written: {output_jsonl_path}")
 
     # Finalize statistics
