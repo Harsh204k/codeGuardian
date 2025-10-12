@@ -3,7 +3,14 @@
 Phase 2.2 Production-Grade: Advanced Feature Engineering Module
 ================================================================
 
+🎯 KEY PRINCIPLE: PRESERVES ALL VALIDATED.JSONL FIELDS + ADDS NEW FEATURES
+
+Input: validated.jsonl (32 schema fields from UNIFIED_SCHEMA)
+Output: features_static.csv/parquet (64+ fields = 32 original + 32+ computed)
+
 Production-grade feature extraction with:
+✅ **PRESERVES ALL 32 SCHEMA FIELDS** (code, cwe_id, description, etc.)
+✅ **ADDS 32+ NEW COMPUTED FEATURES** (cyclomatic complexity, entropy, etc.)
 ✅ Schema validation via schema_utils
 ✅ Optimized I/O via io_utils (JSONL, CSV, Parquet)
 ✅ Basic code metrics (LOC, tokens, avg line length, comment density)
@@ -19,14 +26,19 @@ Production-grade feature extraction with:
 ✅ CSV/Parquet export for ML models
 ✅ Progress tracking with tqdm
 
+Output Structure:
+- Original Fields (32): All fields from validated.jsonl preserved
+- New Features (32+): Computed metrics for ML training
+- Total Fields: 64+ columns
+
 Outputs:
-- datasets/features/features_static.csv: Feature matrix for ML training
+- datasets/features/features_static.csv: Complete dataset with all fields + features
 - datasets/features/features_static.parquet: Optimized binary format
 - datasets/features/stats_features.json: Feature statistics
 - datasets/features/features_all.jsonl: Feature-enriched records (optional)
 
 Author: CodeGuardian Team
-Version: 3.2.0 (Production-Grade Enhanced)
+Version: 3.3.0 (Schema-Preserving Enhanced)
 Date: 2025-10-12
 """
 
@@ -681,55 +693,104 @@ def calculate_ratios(metrics: Dict[str, Any]) -> Dict[str, float]:
 def _extract_features_worker(record: Dict[str, Any]) -> Dict[str, Any]:
     """
     Worker function for multiprocessing - NO LOGGER to avoid pickling errors.
+    
+    IMPORTANT: This function preserves ALL fields from validated.jsonl and ADDS new features.
 
     Args:
-        record: Input record with code field
+        record: Input record with ALL schema fields from validated.jsonl
 
     Returns:
-        Record enriched with all features
+        Record with ALL original fields + new computed features
     """
     code = record.get("code", "")
 
-    # Create copy of record with essential fields
+    # ✅ PRESERVE ALL ORIGINAL SCHEMA FIELDS (32 fields from UNIFIED_SCHEMA)
     enriched = {
+        # Core identification
         "id": record.get("id", ""),
         "language": record.get("language", ""),
+        "dataset": record.get("dataset", ""),
+        
+        # Code and vulnerability
+        "code": code,
         "is_vulnerable": record.get("is_vulnerable", 0),
-        "dataset": record.get("dataset", record.get("source_dataset", "")),
+        
+        # Vulnerability metadata
+        "cwe_id": record.get("cwe_id", ""),
+        "cve_id": record.get("cve_id", ""),
+        "description": record.get("description", ""),
+        
+        # CWE-enriched fields
+        "attack_type": record.get("attack_type", ""),
+        "severity": record.get("severity", ""),
+        "review_status": record.get("review_status", ""),
+        
+        # Provenance tracking
+        "func_name": record.get("func_name", ""),
+        "file_name": record.get("file_name", ""),
+        "project": record.get("project", ""),
+        "commit_id": record.get("commit_id", ""),
+        
+        # Traceability
+        "source_file": record.get("source_file", ""),
+        "source_row_index": record.get("source_row_index", ""),
+        
+        # Stage III enhancements
+        "vuln_line_start": record.get("vuln_line_start", ""),
+        "vuln_line_end": record.get("vuln_line_end", ""),
+        "context_before": record.get("context_before", ""),
+        "context_after": record.get("context_after", ""),
+        "repo_url": record.get("repo_url", ""),
+        "commit_url": record.get("commit_url", ""),
+        "function_length": record.get("function_length", ""),
+        "num_params": record.get("num_params", ""),
+        "num_calls": record.get("num_calls", ""),
+        "imports": record.get("imports", ""),
+        "code_sha256": record.get("code_sha256", ""),
+        "normalized_timestamp": record.get("normalized_timestamp", ""),
+        "language_stage": record.get("language_stage", ""),
+        "verification_source": record.get("verification_source", ""),
+        "source_dataset_version": record.get("source_dataset_version", ""),
+        "merge_timestamp": record.get("merge_timestamp", ""),
     }
 
     try:
-        # 1. Basic code metrics
+        # ═══════════════════════════════════════════════════════════════
+        # ✨ ADD NEW COMPUTED FEATURES (32+ features)
+        # ═══════════════════════════════════════════════════════════════
+        
+        # 1. Basic code metrics (9 features)
         code_metrics = extract_code_metrics(code)
         enriched.update(code_metrics)
 
-        # 2. Lexical features
+        # 2. Lexical features (7 features)
         lexical = extract_lexical_features(code)
         enriched.update(lexical)
 
-        # 3. Complexity metrics
+        # 3. Complexity metrics (5 features)
         enriched["cyclomatic_complexity"] = calculate_cyclomatic_complexity(code)
         enriched["nesting_depth"] = calculate_nesting_depth(code)
         enriched["ast_depth"] = calculate_ast_depth(code)
         enriched["conditional_count"] = calculate_conditional_count(code)
         enriched["loop_count"] = calculate_loop_count(code)
 
-        # 4. Diversity and entropy metrics
+        # 4. Diversity and entropy metrics (3 features)
         enriched["token_diversity"] = calculate_token_diversity(code)
         enriched["shannon_entropy"] = calculate_shannon_entropy(code)
         enriched["identifier_entropy"] = calculate_identifier_entropy(code)
 
-        # 5. Ratio-based features
+        # 5. Ratio-based features (5 features)
         ratios = calculate_ratios(enriched)
         enriched.update(ratios)
 
-        # 6. Additional metadata features
+        # 6. Binary indicator features (3 features)
         enriched["has_cwe"] = 1 if record.get("cwe_id") else 0
         enriched["has_cve"] = 1 if record.get("cve_id") else 0
         enriched["has_description"] = 1 if record.get("description") else 0
 
     except Exception:
         # Fill with default values for failed extraction (no logging to avoid pickling issues)
+        # NOTE: All original schema fields are preserved, only computed features get defaults
         default_features = {
             "cyclomatic_complexity": 1,
             "nesting_depth": 0,
@@ -753,13 +814,16 @@ def extract_all_features(
 ) -> Dict[str, Any]:
     """
     Extract all features from a single record (with logging support).
+    
+    ✅ Preserves ALL 32 schema fields from validated.jsonl
+    ✅ Adds 32+ new computed features
 
     Args:
-        record: Input record with code field
+        record: Input record with ALL schema fields from validated.jsonl
         validate_schema: Whether to validate against unified schema (disabled for multiprocessing)
 
     Returns:
-        Record enriched with all features
+        Record with ALL original fields + new computed features (64+ total fields)
     """
     try:
         return _extract_features_worker(record)
@@ -767,12 +831,43 @@ def extract_all_features(
         logger.error(
             f"Error extracting features for record {record.get('id', 'unknown')}: {e}"
         )
-        # Return minimal enriched record on error
+        # Return record with ALL original schema fields preserved + default feature values
         return {
+            # ═══ PRESERVE ALL 32 ORIGINAL SCHEMA FIELDS ═══
             "id": record.get("id", ""),
             "language": record.get("language", ""),
+            "dataset": record.get("dataset", ""),
+            "code": record.get("code", ""),
             "is_vulnerable": record.get("is_vulnerable", 0),
-            "dataset": record.get("dataset", record.get("source_dataset", "")),
+            "cwe_id": record.get("cwe_id", ""),
+            "cve_id": record.get("cve_id", ""),
+            "description": record.get("description", ""),
+            "attack_type": record.get("attack_type", ""),
+            "severity": record.get("severity", ""),
+            "review_status": record.get("review_status", ""),
+            "func_name": record.get("func_name", ""),
+            "file_name": record.get("file_name", ""),
+            "project": record.get("project", ""),
+            "commit_id": record.get("commit_id", ""),
+            "source_file": record.get("source_file", ""),
+            "source_row_index": record.get("source_row_index", ""),
+            "vuln_line_start": record.get("vuln_line_start", ""),
+            "vuln_line_end": record.get("vuln_line_end", ""),
+            "context_before": record.get("context_before", ""),
+            "context_after": record.get("context_after", ""),
+            "repo_url": record.get("repo_url", ""),
+            "commit_url": record.get("commit_url", ""),
+            "function_length": record.get("function_length", ""),
+            "num_params": record.get("num_params", ""),
+            "num_calls": record.get("num_calls", ""),
+            "imports": record.get("imports", ""),
+            "code_sha256": record.get("code_sha256", ""),
+            "normalized_timestamp": record.get("normalized_timestamp", ""),
+            "language_stage": record.get("language_stage", ""),
+            "verification_source": record.get("verification_source", ""),
+            "source_dataset_version": record.get("source_dataset_version", ""),
+            "merge_timestamp": record.get("merge_timestamp", ""),
+            # ═══ DEFAULT VALUES FOR NEW COMPUTED FEATURES ═══
             "cyclomatic_complexity": 1,
             "nesting_depth": 0,
             "ast_depth": 1,
