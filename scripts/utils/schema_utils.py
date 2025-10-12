@@ -106,6 +106,7 @@ UNIFIED_SCHEMA = {
         str
     ],  # How vulnerability was verified (e.g., "manual", "automated", "CVE")
     "source_dataset_version": Optional[str],  # Version of original dataset
+    "merge_timestamp": Optional[str],  # Timestamp when record was merged
 }
 
 
@@ -155,6 +156,7 @@ JSONSCHEMA_DEFINITION = {
         "language_stage": {"type": ["string", "null"]},
         "verification_source": {"type": ["string", "null"]},
         "source_dataset_version": {"type": ["string", "null"]},
+        "merge_timestamp": {"type": ["string", "null"]},
     },
     "required": ["id", "language", "dataset", "code", "is_vulnerable"],
     "additionalProperties": False,
