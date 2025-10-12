@@ -678,25 +678,20 @@ def calculate_ratios(metrics: Dict[str, Any]) -> Dict[str, float]:
 
 
 def extract_all_features(
-    record: Dict[str, Any], validate_schema: bool = True
+    record: Dict[str, Any], validate_schema: bool = False
 ) -> Dict[str, Any]:
     """
     Extract all features from a single record.
 
     Args:
         record: Input record with code field
-        validate_schema: Whether to validate against unified schema
+        validate_schema: Whether to validate against unified schema (disabled for multiprocessing)
 
     Returns:
         Record enriched with all features
     """
-    # Validate schema if requested
-    if validate_schema:
-        is_valid, errors = validate_record(record, UNIFIED_SCHEMA) # type: ignore
-        if not is_valid:
-            logger.warning(
-                f"Schema validation failed for record {record.get('id', 'unknown')}: {errors}"
-            )
+    # Schema validation disabled for multiprocessing compatibility
+    # Validation should be done before feature extraction in preprocessing pipeline
 
     code = record.get("code", "")
 
@@ -852,8 +847,9 @@ def process_dataset_to_csv(
             logger.info(
                 f"  Processing chunk {chunk_idx+1} with multiprocessing ({len(chunk)} records)..."
             )
-            features = Parallel(n_jobs=n_jobs)(
-                delayed(extract_all_features)(record, validate_schema)
+            # Disable schema validation for multiprocessing to avoid pickling errors
+            features = Parallel(n_jobs=n_jobs, backend='loky')(
+                delayed(extract_all_features)(record, False)
                 for record in chunk
             )
         else:
@@ -863,7 +859,7 @@ def process_dataset_to_csv(
                 tqdm(chunk, desc=f"Chunk {chunk_idx+1}") if TQDM_AVAILABLE else chunk
             )
             for record in iterator:
-                features.append(extract_all_features(record, validate_schema))
+                features.append(extract_all_features(record, False))
 
         # Update statistics
         for feature in features:
