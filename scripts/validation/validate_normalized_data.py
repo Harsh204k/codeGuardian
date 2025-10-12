@@ -106,7 +106,7 @@ FIELD_TYPES = {
     "function_length": (int, type(None)),
     "num_params": (int, type(None)),
     "num_calls": (int, type(None)),
-    "imports": (str, type(None)),
+    "imports": (list, type(None)),
     # Stage III: Versioning/Provenance (4 fields)
     "normalized_timestamp": (str, type(None)),
     "language_stage": (str, type(None)),
@@ -289,9 +289,11 @@ def validate_language_value(language: str) -> Tuple[bool, Optional[str]]:
     if not isinstance(language, str):
         return False, "Language must be a string"
 
-    normalized = language.lower().strip()
-    if normalized not in VALID_LANGUAGES:
-        return False, f"Invalid language: '{language}'"
+    # Normalize input to a canonical form using LANGUAGE_NORMALIZATION
+    key = language.lower().strip()
+    canonical = LANGUAGE_NORMALIZATION.get(key, language.strip())
+    if canonical not in VALID_LANGUAGES:
+        return False, f"Invalid language: '{language}' (normalized -> '{canonical}')"
 
     return True, None
 
@@ -738,6 +740,55 @@ def validate_dataset_enhanced(
     logger.info(f"Writing validation report...")
     write_json(stats, report_path, indent=2)
 
+    # --- Extra summary outputs for Kaggle visualization ---
+    try:
+        report_dir = Path(report_path).parent
+        # Compact summary JSON
+        summary = {
+            "start_time": stats["start_time"],
+            "end_time": stats["end_time"],
+            "total_records": stats["total_records"],
+            "valid_records": stats["valid_records"],
+            "invalid_records": stats["invalid_records"],
+            "repaired_records": stats["repaired_records"],
+            "duplicates_removed": stats["duplicates_removed"],
+            "validation_pass_rate": stats.get("validation_pass_rate", 0),
+        }
+        write_json(summary, str(report_dir / "validation_summary.json"), indent=2)
+
+        # Field stats CSV
+        try:
+            import csv
+
+            field_stats_csv = report_dir / "validation_field_stats.csv"
+            with field_stats_csv.open("w", newline="", encoding="utf-8") as csvf:
+                writer = csv.writer(csvf)
+                writer.writerow(["field", "total", "null", "empty", "invalid_type"])
+                for field, vals in stats["field_stats"].items():
+                    writer.writerow(
+                        [
+                            field,
+                            vals.get("total", 0),
+                            vals.get("null", 0),
+                            vals.get("empty", 0),
+                            vals.get("invalid_type", 0),
+                        ]
+                    )
+
+            # Top errors CSV
+            top_errors_csv = report_dir / "validation_top_errors.csv"
+            with top_errors_csv.open("w", newline="", encoding="utf-8") as csvf:
+                writer = csv.writer(csvf)
+                writer.writerow(["error", "count"])
+                for err, cnt in sorted(
+                    stats["error_counts"].items(), key=lambda x: -x[1]
+                )[:50]:
+                    writer.writerow([err, cnt])
+        except Exception:
+            logger.exception("Failed to write CSV summaries")
+    except Exception:
+        logger.exception("Failed to write extra summary outputs")
+
     # Print summary
     logger.info("=" * 80)
     logger.info("VALIDATION SUMMARY")
@@ -917,8 +968,8 @@ def main():
     if args.errors:
         errors_path = args.errors
     else:
-        validated_dir = get_output_path("validated")
-        errors_path = str(validated_dir / "validation_errors.jsonl")
+        # Put validation errors next to the output (merged/ or user-specified folder)
+        errors_path = str(Path(output_path).parent / "validation_errors.jsonl")
 
     logger.info(f"[INFO] Reading input from: {input_path}")
     logger.info(f"[INFO] Writing validated data to: {output_path}")
