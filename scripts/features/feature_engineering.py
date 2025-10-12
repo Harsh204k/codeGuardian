@@ -948,7 +948,7 @@ def process_dataset_to_csv(
         # 2. Parquet output (optimized) - use pandas native method
         if output_parquet_path:
             try:
-                df.to_parquet(output_parquet_path, index=False, compression='snappy')
+                df.to_parquet(output_parquet_path, index=False, compression="snappy")
                 logger.info(f"✅ Parquet written: {output_parquet_path}")
             except Exception as e:
                 logger.warning(f"Failed to write Parquet (non-critical): {e}")
