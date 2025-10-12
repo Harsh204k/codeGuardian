@@ -464,6 +464,18 @@ def auto_repair_record(
                 repaired[field] = upper
                 repairs.append(f"Normalized '{field}' to uppercase")
 
+    # Fix imports field: convert string → list (Stage III compliance)
+    if "imports" in repaired and isinstance(repaired["imports"], str):
+        original_imports = repaired["imports"]
+        # If it's a comma-separated string, split it; otherwise make single-item list
+        if "," in original_imports:
+            repaired["imports"] = [
+                imp.strip() for imp in original_imports.split(",") if imp.strip()
+            ]
+        else:
+            repaired["imports"] = [original_imports] if original_imports.strip() else []
+        repairs.append(f"Converted 'imports' from string to list")
+
     return repaired, repairs
 
 
