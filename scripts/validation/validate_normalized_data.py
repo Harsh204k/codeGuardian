@@ -12,9 +12,9 @@ Production-grade validation with Stage III 31-field schema support:
 - Per-dataset validation metrics
 
 Outputs:
-- datasets/unified/validated.jsonl: Clean, validated records
-- datasets/unified/validation_report.json: Comprehensive stats
-- datasets/unified/validation_errors.jsonl: Failed records with error details
+- datasets/validated/validated.jsonl: Clean, validated records
+- datasets/validated/validation_report.json: Comprehensive stats
+- datasets/validated/validation_errors.jsonl: Failed records with error details
 
 Author: CodeGuardian Team
 Version: 3.1.0 (Stage III Compatible)
@@ -813,8 +813,8 @@ def main():
     if args.input:
         input_path = args.input
     else:
-        unified_dir = get_output_path("unified")
-        input_path = str(unified_dir / "processed_all.jsonl")
+        validated_dir = get_output_path("validated")
+        input_path = str(validated_dir / "processed_all.jsonl")
 
     # If user provided a directory (common in Kaggle), try to auto-detect merged file
     input_path_obj = Path(input_path)
@@ -905,20 +905,20 @@ def main():
     if args.output:
         output_path = args.output
     else:
-        unified_dir = get_output_path("unified")
-        output_path = str(unified_dir / "validated.jsonl")
+        validated_dir = get_output_path("validated")
+        output_path = str(validated_dir / "validated.jsonl")
 
     if args.report:
         report_path = args.report
     else:
-        unified_dir = get_output_path("unified")
-        report_path = str(unified_dir / "validation_report.json")
+        validated_dir = get_output_path("validated")
+        report_path = str(validated_dir / "validation_report.json")
 
     if args.errors:
         errors_path = args.errors
     else:
-        unified_dir = get_output_path("unified")
-        errors_path = str(unified_dir / "validation_errors.jsonl")
+        validated_dir = get_output_path("validated")
+        errors_path = str(validated_dir / "validation_errors.jsonl")
 
     logger.info(f"[INFO] Reading input from: {input_path}")
     logger.info(f"[INFO] Writing validated data to: {output_path}")
