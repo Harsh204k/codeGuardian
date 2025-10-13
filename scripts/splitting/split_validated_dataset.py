@@ -220,6 +220,61 @@ def compute_class_distribution(df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
+def normalize_dataframe_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Detect and remove common index/unnamed artifact columns that appear when
+    CSVs were saved with an index (e.g., 'Unnamed: 0', 'index'). This tries
+    to be conservative: only drops obvious artifacts and fully-empty columns
+    until the column count matches EXPECTED_COLUMNS or no safe candidates
+    remain.
+
+    Returns the possibly-modified DataFrame and a list of dropped column names.
+    """
+    dropped: List[str] = []
+
+    # Candidate index-like columns
+    candidates = [
+        c
+        for c in df.columns
+        if (str(c).startswith("Unnamed") or str(c).lower() == "index")
+    ]
+
+    # Drop candidates if they don't remove the target column
+    safe_drop = [c for c in candidates if c != TARGET_COLUMN]
+    if safe_drop:
+        df = df.drop(columns=safe_drop)
+        dropped.extend(safe_drop)
+        logger.warning(f"Auto-dropped index-like columns: {safe_drop}")
+
+    # If still too many columns, drop fully-empty columns (conservative)
+    if len(df.columns) > EXPECTED_COLUMNS:
+        null_cols = [c for c in df.columns if df[c].isna().all() and c != TARGET_COLUMN]
+        # drop in insertion order until we reach expected count or run out
+        for c in null_cols:
+            if len(df.columns) <= EXPECTED_COLUMNS:
+                break
+            df = df.drop(columns=[c])
+            dropped.append(c)
+            logger.warning(f"Auto-dropped all-null column: {c}")
+
+    # Final conservative pass: drop any remaining Unnamed/*empty name columns
+    if len(df.columns) > EXPECTED_COLUMNS:
+        artifact_cols = [
+            c
+            for c in df.columns
+            if (str(c).strip() == "" or "unnamed" in str(c).lower())
+            and c != TARGET_COLUMN
+        ]
+        for c in artifact_cols:
+            if len(df.columns) <= EXPECTED_COLUMNS:
+                break
+            df = df.drop(columns=[c])
+            dropped.append(c)
+            logger.warning(f"Auto-dropped artifact column: {c}")
+
+    return df, dropped
+
+
 def validate_balance(
     train_dist: Dict, val_dist: Dict, test_dist: Dict
 ) -> Tuple[bool, float]:
@@ -596,6 +651,17 @@ def generate_report(
                 f.write(f"- {issue}\n")
             f.write("\n")
 
+        # Auto-dropped columns (if any)
+        if validation_report.get("auto_dropped_columns"):
+            f.write("---\n\n")
+            f.write("## Auto-applied Fixes\n\n")
+            f.write(
+                "The loader detected and automatically dropped index/unnamed artifact columns to match the expected schema.\n\n"
+            )
+            for c in validation_report.get("auto_dropped_columns", []):
+                f.write(f"- Dropped column: `{c}`\n")
+            f.write("\n")
+
         f.write("---\n\n")
         f.write("## Output Files\n\n")
         for file_type, file_path in output_files.items():
@@ -666,6 +732,13 @@ def main():
         df = pd.read_csv(INPUT_PATH)
         logger.info(f"✅ Loaded {len(df):,} rows × {len(df.columns)} columns")
 
+        # Normalize columns (drop index/unnamed artifacts conservatively)
+        df, auto_dropped_columns = normalize_dataframe_columns(df)
+        if auto_dropped_columns:
+            logger.info(f"Columns auto-dropped to match schema: {auto_dropped_columns}")
+        else:
+            logger.info("No auto-dropped columns detected after loading CSV")
+
         # Validate target column exists
         if TARGET_COLUMN not in df.columns:
             logger.error(f"❌ Target column '{TARGET_COLUMN}' not found!")
@@ -688,6 +761,10 @@ def main():
 
         # Validate splits
         is_valid, validation_report = validate_splits(train_df, val_df, test_df, df)
+
+        # Record any auto-fixes applied into the validation report
+        if auto_dropped_columns:
+            validation_report.setdefault("auto_dropped_columns", auto_dropped_columns)
 
         # Save outputs
         output_files = save_outputs(train_df, val_df, test_df, OUTPUT_DIR)
