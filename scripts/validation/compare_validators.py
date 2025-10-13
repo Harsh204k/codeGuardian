@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+#type: ignore
 """
 Compare single-threaded vs multiprocessing validator performance
 """

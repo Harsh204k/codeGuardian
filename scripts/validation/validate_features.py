@@ -439,10 +439,9 @@ class EnhancedDatasetValidator:
                             # Float coercion
                             self.df[col] = pd.to_numeric(self.df[col], errors="coerce")
                         else:
-                            # Object/string
-                            self.df[col] = (
-                                self.df[col].astype(str).replace("nan", np.nan)
-                            )
+                            # Object/string - fix FutureWarning by using mask instead of replace
+                            str_series = self.df[col].astype(str)
+                            self.df[col] = str_series.where(str_series != "nan", np.nan)
 
                         type_coercions.append(
                             f"{col}: {current_dtype} → {expected_dtype}"
@@ -491,16 +490,16 @@ class EnhancedDatasetValidator:
                     dtype = str(self.df[col].dtype)
 
                     if dtype == "bool":
-                        self.df[col].fillna(False, inplace=True)
+                        self.df[col] = self.df[col].fillna(False)
                     elif dtype in ["int64", "float64"]:
                         # Use column mean for numeric
                         col_mean = self.df[col].mean()
                         if pd.isna(col_mean):  # All NaN column
                             col_mean = 0
-                        self.df[col].fillna(col_mean, inplace=True)
+                        self.df[col] = self.df[col].fillna(col_mean)
                     else:
                         # Use "unknown" for categorical/object
-                        self.df[col].fillna("unknown", inplace=True)
+                        self.df[col] = self.df[col].fillna("unknown")
 
             # Add imputation flag column
             self.df["imputation_flag"] = imputation_mask.astype(int)
