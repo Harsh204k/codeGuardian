@@ -56,9 +56,11 @@ warnings.filterwarnings("ignore", category=UserWarning)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
-    from utils.logging_utils import setup_logging
+    from utils.logging_utils import setup_logging, get_logger
 
-    logger = setup_logging("split_validated_dataset")
+    # Configure logging (use default INFO level) and get a module-scoped logger
+    setup_logging()
+    logger = get_logger(__name__)
 except ImportError:
     import logging
 
