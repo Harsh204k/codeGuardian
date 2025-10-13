@@ -31,11 +31,15 @@ import os
 import sys
 import json
 import time
+import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
 
 import numpy as np
 import pandas as pd
+
+# Suppress pandas FutureWarnings for cleaner output
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 
 # ============================================================================
