@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 
 # Suppress pandas FutureWarnings for cleaner output
-warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 # ============================================================================
