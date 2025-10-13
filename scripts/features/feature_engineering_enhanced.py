@@ -80,7 +80,7 @@ except ImportError:
     JOBLIB_AVAILABLE = False
 
 try:
-    import networkx as nx
+    import networkx as nx # type: ignore
 
     NETWORKX_AVAILABLE = True
 except ImportError:
@@ -1489,16 +1489,6 @@ def main():
         type=int,
         default=-1,
         help="Number of parallel jobs (-1 for all cores)",
-    )
-    parser.add_argument(
-        "--disable-phase2",
-        action="store_true",
-        help="Disable Phase 2 features (AST, semantic, security)",
-    )
-    parser.add_argument(
-        "--disable-phase3",
-        action="store_true",
-        help="Disable Phase 3 features (graph, taint, data flow)",
     )
 
     args = parser.parse_args()
