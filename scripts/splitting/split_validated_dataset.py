@@ -83,7 +83,7 @@ TEST_RATIO = 0.10
 RANDOM_SEED = 42
 
 # Schema Validation
-EXPECTED_COLUMNS = 107  # From validation_summary.json
+EXPECTED_COLUMNS = None  # Auto-detect from input (flexible schema)
 TARGET_COLUMN = "is_vulnerable"
 
 # Quality Thresholds
@@ -169,21 +169,24 @@ def save_dataframe_jsonl(df: pd.DataFrame, output_path: str) -> float:
     return size_mb
 
 
-def validate_schema(df: pd.DataFrame, split_name: str) -> bool:
+def validate_schema(
+    df: pd.DataFrame, split_name: str, expected_cols: int = None
+) -> bool:
     """
     Validate DataFrame schema integrity.
 
     Args:
         df: DataFrame to validate
         split_name: Name of split (for logging)
+        expected_cols: Expected number of columns (None = auto-detect from first split)
 
     Returns:
         True if valid, False otherwise
     """
-    if len(df.columns) != EXPECTED_COLUMNS:
+    if expected_cols is not None and len(df.columns) != expected_cols:
         logger.error(
             f"❌ {split_name}: Schema mismatch! "
-            f"Expected {EXPECTED_COLUMNS} columns, got {len(df.columns)}"
+            f"Expected {expected_cols} columns, got {len(df.columns)}"
         )
         return False
 
@@ -218,61 +221,6 @@ def compute_class_distribution(df: pd.DataFrame) -> Dict[str, Any]:
         "vulnerable_pct": round(vulnerable / total * 100, 2),
         "safe_pct": round(safe / total * 100, 2),
     }
-
-
-def normalize_dataframe_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
-    """
-    Detect and remove common index/unnamed artifact columns that appear when
-    CSVs were saved with an index (e.g., 'Unnamed: 0', 'index'). This tries
-    to be conservative: only drops obvious artifacts and fully-empty columns
-    until the column count matches EXPECTED_COLUMNS or no safe candidates
-    remain.
-
-    Returns the possibly-modified DataFrame and a list of dropped column names.
-    """
-    dropped: List[str] = []
-
-    # Candidate index-like columns
-    candidates = [
-        c
-        for c in df.columns
-        if (str(c).startswith("Unnamed") or str(c).lower() == "index")
-    ]
-
-    # Drop candidates if they don't remove the target column
-    safe_drop = [c for c in candidates if c != TARGET_COLUMN]
-    if safe_drop:
-        df = df.drop(columns=safe_drop)
-        dropped.extend(safe_drop)
-        logger.warning(f"Auto-dropped index-like columns: {safe_drop}")
-
-    # If still too many columns, drop fully-empty columns (conservative)
-    if len(df.columns) > EXPECTED_COLUMNS:
-        null_cols = [c for c in df.columns if df[c].isna().all() and c != TARGET_COLUMN]
-        # drop in insertion order until we reach expected count or run out
-        for c in null_cols:
-            if len(df.columns) <= EXPECTED_COLUMNS:
-                break
-            df = df.drop(columns=[c])
-            dropped.append(c)
-            logger.warning(f"Auto-dropped all-null column: {c}")
-
-    # Final conservative pass: drop any remaining Unnamed/*empty name columns
-    if len(df.columns) > EXPECTED_COLUMNS:
-        artifact_cols = [
-            c
-            for c in df.columns
-            if (str(c).strip() == "" or "unnamed" in str(c).lower())
-            and c != TARGET_COLUMN
-        ]
-        for c in artifact_cols:
-            if len(df.columns) <= EXPECTED_COLUMNS:
-                break
-            df = df.drop(columns=[c])
-            dropped.append(c)
-            logger.warning(f"Auto-dropped artifact column: {c}")
-
-    return df, dropped
 
 
 def validate_balance(
@@ -441,10 +389,15 @@ def validate_splits(
 
     # 1. Schema validation
     logger.info("Validating schema integrity...")
+
+    # Auto-detect expected column count from original dataset
+    expected_cols = len(original_df.columns)
+    logger.info(f"   Expected columns: {expected_cols} (auto-detected from input)")
+
     schema_checks = [
-        validate_schema(train_df, "Train"),
-        validate_schema(val_df, "Val"),
-        validate_schema(test_df, "Test"),
+        validate_schema(train_df, "Train", expected_cols),
+        validate_schema(val_df, "Val", expected_cols),
+        validate_schema(test_df, "Test", expected_cols),
     ]
 
     if not all(schema_checks):
@@ -489,6 +442,7 @@ def validate_splits(
         "test": test_dist,
     }
     validation_report["max_variance"] = round(max_variance, 4)
+    validation_report["schema_columns"] = len(train_df.columns)
 
     # Overall validation status
     is_valid = (
@@ -592,6 +546,9 @@ def generate_report(
             f"**Split Ratios:** Train {TRAIN_RATIO:.0%}, Val {VAL_RATIO:.0%}, Test {TEST_RATIO:.0%}\n\n"
         )
         f.write(f"**Random Seed:** {RANDOM_SEED}\n\n")
+        f.write(
+            f"**Schema:** {validation_report.get('schema_columns', 'N/A')} columns\n\n"
+        )
         f.write(f"**Execution Time:** {execution_time:.2f}s\n\n")
 
         f.write("---\n\n")
@@ -649,17 +606,6 @@ def generate_report(
             f.write("### ⚠️ Issues Detected\n\n")
             for issue in validation_report["issues"]:
                 f.write(f"- {issue}\n")
-            f.write("\n")
-
-        # Auto-dropped columns (if any)
-        if validation_report.get("auto_dropped_columns"):
-            f.write("---\n\n")
-            f.write("## Auto-applied Fixes\n\n")
-            f.write(
-                "The loader detected and automatically dropped index/unnamed artifact columns to match the expected schema.\n\n"
-            )
-            for c in validation_report.get("auto_dropped_columns", []):
-                f.write(f"- Dropped column: `{c}`\n")
             f.write("\n")
 
         f.write("---\n\n")
@@ -732,12 +678,11 @@ def main():
         df = pd.read_csv(INPUT_PATH)
         logger.info(f"✅ Loaded {len(df):,} rows × {len(df.columns)} columns")
 
-        # Normalize columns (drop index/unnamed artifacts conservatively)
-        df, auto_dropped_columns = normalize_dataframe_columns(df)
-        if auto_dropped_columns:
-            logger.info(f"Columns auto-dropped to match schema: {auto_dropped_columns}")
-        else:
-            logger.info("No auto-dropped columns detected after loading CSV")
+        # Log actual schema info
+        logger.info(f"   Schema: {len(df.columns)} columns detected")
+        logger.info(
+            f"   Target column: '{TARGET_COLUMN}' {'✅ present' if TARGET_COLUMN in df.columns else '❌ MISSING'}"
+        )
 
         # Validate target column exists
         if TARGET_COLUMN not in df.columns:
@@ -761,10 +706,6 @@ def main():
 
         # Validate splits
         is_valid, validation_report = validate_splits(train_df, val_df, test_df, df)
-
-        # Record any auto-fixes applied into the validation report
-        if auto_dropped_columns:
-            validation_report.setdefault("auto_dropped_columns", auto_dropped_columns)
 
         # Save outputs
         output_files = save_outputs(train_df, val_df, test_df, OUTPUT_DIR)
