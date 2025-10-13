@@ -59,11 +59,11 @@ class TokenizationConfig:
     test_path: str = f"{input_base}/test.jsonl"
 
     # Output paths
-    output_base: str = "/kaggle/working/datasets/tokenized"
+    output_base: str = "/kaggle/working/datasets/tokenized/codebert"
     cache_dir: str = f"{output_base}/.cache"  # Cache directory
-    train_output: str = f"{output_base}/train_tokenized.pt"
-    val_output: str = f"{output_base}/val_tokenized.pt"
-    test_output: str = f"{output_base}/test_tokenized.pt"
+    train_output: str = f"{output_base}/train_tokenized_codebert.pt"
+    val_output: str = f"{output_base}/val_tokenized_codebert.pt"
+    test_output: str = f"{output_base}/test_tokenized_codebert.pt"
     error_log: str = f"{output_base}/tokenization_errors.jsonl"
 
     # Processing configuration
