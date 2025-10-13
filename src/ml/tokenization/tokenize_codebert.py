@@ -52,7 +52,7 @@ class TokenizationConfig:
 
     # Input paths (Kaggle)
     input_base: str = (
-        "/kaggle/input/codeguardian-pre-processed-datasets/random_splitted"
+        "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/random_splitted"
     )
     train_path: str = f"{input_base}/train.jsonl"
     val_path: str = f"{input_base}/val.jsonl"
