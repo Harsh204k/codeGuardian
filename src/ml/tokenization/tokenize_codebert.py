@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-#type: ignore
+# type: ignore
 
 """
 CodeBERT Tokenization Pipeline for Vulnerability Detection
@@ -68,7 +68,7 @@ class TokenizationConfig:
 
     # Processing configuration
     batch_size: int = 32
-    num_workers: int = 8  # Leverage CPU cores
+    num_workers: int = 4  # Reduced for compatibility (was 8)
     padding: str = "max_length"  # Will be overridden if dynamic_padding=True
     truncation: bool = True
     return_attention_mask: bool = True
@@ -113,12 +113,13 @@ logger = logging.getLogger(__name__)
 
 
 class ErrorTracker:
-    """Track and log tokenization errors per row"""
+    """Track and log tokenization errors per row (multiprocessing-safe)"""
 
     def __init__(self, config: TokenizationConfig):
         self.config = config
         self.errors = []
-        self.error_file = open(config.error_log, "w", encoding="utf-8")
+        self.error_log_path = config.error_log
+        # Don't keep file handle open - open/close for each write to be pickle-safe
 
     def log_error(
         self,
@@ -148,8 +149,13 @@ class ErrorTracker:
             }
 
         self.errors.append(error_entry)
-        self.error_file.write(json.dumps(error_entry) + "\n")
-        self.error_file.flush()
+
+        # Open, write, and close immediately for multiprocessing safety
+        try:
+            with open(self.error_log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(error_entry) + "\n")
+        except Exception as e:
+            logger.warning(f"Failed to write error log: {e}")
 
         logger.warning(
             f"⚠️ Row error [{split_name}]: ID={row_id}, Type={error_type}, Msg={error_msg}"
@@ -172,13 +178,12 @@ class ErrorTracker:
         return False
 
     def close(self):
-        """Close error log file"""
-        self.error_file.close()
+        """Close error log file (no-op since we don't keep file open)"""
+        pass
 
     def __del__(self):
-        """Cleanup"""
-        if hasattr(self, "error_file") and not self.error_file.closed:
-            self.error_file.close()
+        """Cleanup (no-op since we don't keep file open)"""
+        pass
 
 
 # ============================================================================
