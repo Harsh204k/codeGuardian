@@ -30,11 +30,11 @@ print("=" * 80)
 
 try:
     from tokenize_codebert import main as tokenize_codebert_main
-    
+
     print("Starting CodeBERT tokenization...")
     codebert_score = tokenize_codebert_main()
     print(f"\n✅ CodeBERT tokenization completed with score: {codebert_score}/200")
-    
+
 except Exception as e:
     print(f"\n❌ CodeBERT tokenization failed: {e}")
     codebert_score = 0
@@ -49,11 +49,13 @@ print("=" * 80)
 
 try:
     from tokenize_graphcodebert import main as tokenize_graphcodebert_main
-    
+
     print("Starting GraphCodeBERT tokenization...")
     graphcodebert_score = tokenize_graphcodebert_main()
-    print(f"\n✅ GraphCodeBERT tokenization completed with score: {graphcodebert_score}/200")
-    
+    print(
+        f"\n✅ GraphCodeBERT tokenization completed with score: {graphcodebert_score}/200"
+    )
+
 except Exception as e:
     print(f"\n❌ GraphCodeBERT tokenization failed: {e}")
     graphcodebert_score = 0
@@ -86,7 +88,7 @@ for model in ["codebert", "graphcodebert"]:
     model_dir = os.path.join(output_base, model)
     if os.path.exists(model_dir):
         files = os.listdir(model_dir)
-        pt_files = [f for f in files if f.endswith('.pt')]
+        pt_files = [f for f in files if f.endswith(".pt")]
         print(f"\n   {model}:")
         for f in pt_files:
             file_path = os.path.join(model_dir, f)
