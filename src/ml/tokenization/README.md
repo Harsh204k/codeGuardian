@@ -21,6 +21,7 @@ python src/ml/tokenization/tokenize_codebert.py
 ```
 
 **Outputs:**
+
 ```
 /kaggle/working/datasets/tokenized/codebert/
 ├── train_tokenized_codebert.pt
@@ -38,6 +39,7 @@ python src/ml/tokenization/tokenize_graphcodebert.py
 ```
 
 **Outputs:**
+
 ```
 /kaggle/working/datasets/tokenized/graphcodebert/
 ├── train_tokenized_graphcodebert.pt
@@ -60,6 +62,7 @@ Each `.pt` file contains a dictionary with:
 ```
 
 Where:
+
 - `N` = number of samples
 - `512` = max sequence length
 - Labels: `0` = non-vulnerable, `1` = vulnerable
@@ -80,6 +83,7 @@ python scripts/check_tokenized.py datasets/tokenized/codebert/test_tokenized_cod
 ```
 
 **Expected Output:**
+
 ```
 Loaded: datasets/tokenized/codebert/train_tokenized_codebert.pt
 Keys: ['input_ids', 'attention_mask', 'labels']
@@ -100,20 +104,20 @@ class TokenizationConfig:
     # Model
     model_name: str = "microsoft/codebert-base"  # or "microsoft/graphcodebert-base"
     max_seq_length: int = 512
-    
+
     # Processing
     batch_size: int = 128
     num_workers: int = 0  # Single-process for stability
     dynamic_padding: bool = True
-    
+
     # Caching
     use_cache: bool = True
     force_retokenize: bool = False
-    
+
     # Error handling
     skip_on_error: bool = True
     max_errors_per_split: int = 100
-    
+
     # Validation
     strict_binary_labels: bool = True
     min_samples: int = 100
@@ -163,11 +167,13 @@ print(data['labels'].unique())  # Should be [0, 1]
 ## 📈 Performance
 
 **Expected Runtime (507k samples):**
+
 - **Tokenization**: ~5-10 minutes (chunked batch)
 - **Validation**: ~1-2 minutes
 - **Total**: ~7-12 minutes per split
 
 **Memory Usage:**
+
 - **Peak**: ~2-3 GB RAM
 - **Output files**: ~1-2 GB per split
 
