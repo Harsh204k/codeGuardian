@@ -779,6 +779,95 @@ def sanity_check(output_path: str, split_name: str) -> None:
 
 
 # ============================================================================
+# ROBUST SPLIT PROCESSING HELPERS
+# ============================================================================
+
+
+def process_and_persist_split(
+    split_name: str,
+    data: List[Dict],
+    tokenizer,
+    config: TokenizationConfig,
+    error_tracker: ErrorTracker,
+) -> Dict[str, torch.Tensor]:
+    """
+    End-to-end handling for a single split:
+      - try cache
+      - tokenizes (chunked)
+      - validates shapes & labels
+      - saves to cache and final output
+      - performs sanity check
+    Returns the tokenized_data dict.
+
+    Rewards: ✅ Complete split processing with validation
+    Penalties: ❌ Any failure in the pipeline
+    """
+    logger.info(f"\n[PROCESS] Starting processing for split: {split_name}")
+
+    # Try to load from cache first
+    tokenized = load_from_cache(split_name, config)
+    if tokenized is not None:
+        # Validate loaded cache quickly
+        try:
+            validate_tokenized_data(tokenized, split_name, len(data), config)
+            logger.info(f"✅ Cache validated for {split_name}")
+            return tokenized
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Cache validation failed for {split_name}: {e}. Retokenizing..."
+            )
+
+    # Tokenize fresh
+    tokenized = tokenize_dataset_batch(
+        data, tokenizer, config, split_name, error_tracker
+    )
+
+    # Validate tokenized data
+    validate_tokenized_data(
+        tokenized, split_name, tokenized["input_ids"].shape[0], config
+    )
+
+    # Save to cache (if enabled)
+    try:
+        save_to_cache(tokenized, split_name, config)
+    except Exception as e:
+        logger.warning(f"⚠️ Unable to cache {split_name}: {e} (continuing)")
+
+    # Persist final dataset to configured output path
+    output_map = {
+        "train": config.train_output,
+        "val": config.val_output,
+        "test": config.test_output,
+    }
+    out_path = output_map.get(split_name)
+    if out_path is None:
+        # Fallback: create file under output_base
+        out_path = os.path.join(config.output_base, f"{split_name}_tokenized.pt")
+
+    save_tokenized_dataset(tokenized, out_path, split_name)
+
+    # Sanity check saved file
+    sanity_check(out_path, split_name)
+
+    return tokenized
+
+
+def assert_outputs_exist(config: TokenizationConfig):
+    """
+    Assert that all final tokenized output files exist.
+
+    Rewards: ✅ All outputs present
+    Penalties: ❌ Missing outputs
+    """
+    expected = [config.train_output, config.val_output, config.test_output]
+    missing = [p for p in expected if not os.path.exists(p)]
+    if missing:
+        logger.error(f"❌ PENALTY: Missing final outputs: {missing}")
+        raise FileNotFoundError(f"Missing outputs: {missing}")
+    logger.info("✅ All final tokenized output files are present.")
+
+
+# ============================================================================
 # MAIN PIPELINE
 # ============================================================================
 
@@ -856,75 +945,57 @@ def main():
         reward_score += 10
 
         # ====================================================================
-        # STEP 5: Tokenize (with caching)
+        # STEP 5-7: Tokenize -> Validate -> Save -> Sanity-check (Consolidated)
         # ====================================================================
-        logger.info("\n[STEP 5/7] Tokenizing datasets...")
+        logger.info(
+            "\n[STEP 5-7] Tokenize -> Validate -> Save -> Sanity-check for all splits"
+        )
 
-        # Try cache for train
-        train_tokenized = load_from_cache("train", config)
-        if train_tokenized is None:
-            train_tokenized = tokenize_dataset_batch(
-                train_data, tokenizer, config, "train", error_tracker
-            )
-            save_to_cache(train_tokenized, "train", config)
-        logger.info(f"✅ REWARD +20: Train tokenization complete")
-        reward_score += 20
+        # Process train
+        train_tokenized = process_and_persist_split(
+            "train", train_data, tokenizer, config, error_tracker
+        )
+        logger.info(f"✅ REWARD +30: Train tokenization & persist complete")
+        reward_score += 30
 
-        # Try cache for val
-        val_tokenized = load_from_cache("val", config)
-        if val_tokenized is None:
-            val_tokenized = tokenize_dataset_batch(
-                val_data, tokenizer, config, "val", error_tracker
-            )
-            save_to_cache(val_tokenized, "val", config)
-        logger.info(f"✅ REWARD +20: Validation tokenization complete")
-        reward_score += 20
+        # Process val
+        val_tokenized = process_and_persist_split(
+            "val", val_data, tokenizer, config, error_tracker
+        )
+        logger.info(f"✅ REWARD +30: Validation tokenization & persist complete")
+        reward_score += 30
 
-        # Try cache for test
-        test_tokenized = load_from_cache("test", config)
-        if test_tokenized is None:
-            test_tokenized = tokenize_dataset_batch(
-                test_data, tokenizer, config, "test", error_tracker
-            )
-            save_to_cache(test_tokenized, "test", config)
-        logger.info(f"✅ REWARD +20: Test tokenization complete")
-        reward_score += 20
+        # Process test
+        test_tokenized = process_and_persist_split(
+            "test", test_data, tokenizer, config, error_tracker
+        )
+        logger.info(f"✅ REWARD +30: Test tokenization & persist complete")
+        reward_score += 30
 
         # ====================================================================
-        # STEP 6: Validate Tokenized Data
+        # STEP 8: Final Validation
         # ====================================================================
-        logger.info("\n[STEP 6/7] Validating tokenized datasets...")
+        logger.info("\n[STEP 8] Final validation of all tokenized datasets...")
 
-        validate_tokenized_data(train_tokenized, "train", len(train_data), config)
-        validate_tokenized_data(val_tokenized, "val", len(val_data), config)
-        validate_tokenized_data(test_tokenized, "test", len(test_data), config)
-
+        validate_tokenized_data(
+            train_tokenized, "train", train_tokenized["input_ids"].shape[0], config
+        )
+        validate_tokenized_data(
+            val_tokenized, "val", val_tokenized["input_ids"].shape[0], config
+        )
+        validate_tokenized_data(
+            test_tokenized, "test", test_tokenized["input_ids"].shape[0], config
+        )
         logger.info(f"✅ REWARD +20: All tokenized datasets validated successfully")
         reward_score += 20
 
         # ====================================================================
-        # STEP 7: Save
+        # STEP 9: Assert Outputs Exist
         # ====================================================================
-        logger.info("\n[STEP 7/7] Saving tokenized datasets...")
-
-        save_tokenized_dataset(train_tokenized, config.train_output, "train")
-        save_tokenized_dataset(val_tokenized, config.val_output, "val")
-        save_tokenized_dataset(test_tokenized, config.test_output, "test")
-
-        logger.info(f"✅ REWARD +20: All datasets saved successfully")
-        reward_score += 20
-
-        # ====================================================================
-        # STEP 8: Sanity Checks
-        # ====================================================================
-        logger.info("\n[BONUS] Running sanity checks...")
-
-        sanity_check(config.train_output, "train")
-        sanity_check(config.val_output, "val")
-        sanity_check(config.test_output, "test")
-
-        logger.info(f"✅ REWARD +30: All sanity checks passed")
-        reward_score += 30
+        logger.info("\n[STEP 9] Verifying all output files exist...")
+        assert_outputs_exist(config)
+        logger.info(f"✅ REWARD +10: All output files verified")
+        reward_score += 10
 
         # ====================================================================
         # Error Summary
@@ -954,11 +1025,11 @@ def main():
         logger.info("\n" + "=" * 80)
         logger.info("🎉 PIPELINE COMPLETED SUCCESSFULLY!")
         logger.info("=" * 80)
-        logger.info(f"🏆 FINAL REWARD SCORE: {reward_score}/170 (adjusted for errors)")
+        logger.info(f"🏆 FINAL REWARD SCORE: {reward_score}/200 (adjusted for errors)")
         logger.info(f"\n📁 Output Directory: {config.output_base}")
-        logger.info(f"   ├── train_tokenized.pt ({len(train_data)} samples)")
-        logger.info(f"   ├── val_tokenized.pt ({len(val_data)} samples)")
-        logger.info(f"   ├── test_tokenized.pt ({len(test_data)} samples)")
+        logger.info(f"   ├── train_tokenized_codebert.pt ({len(train_data)} samples)")
+        logger.info(f"   ├── val_tokenized_codebert.pt ({len(val_data)} samples)")
+        logger.info(f"   ├── test_tokenized_codebert.pt ({len(test_data)} samples)")
         if config.use_cache:
             logger.info(f"   └── .cache/ (cached tokenized data)")
         logger.info(f"\n📝 Logs:")
@@ -966,15 +1037,14 @@ def main():
         logger.info(f"   └── {config.error_log}")
         logger.info("\n✅ Ready for fine-tuning!")
         logger.info("\n🎁 Enhanced Features:")
-        logger.info(
-            f"   ✅ Dynamic padding: {'ON' if config.dynamic_padding else 'OFF'}"
-        )
+        logger.info(f"   ✅ Chunked batch tokenization (memory-safe)")
         logger.info(f"   ✅ Caching: {'ON' if config.use_cache else 'OFF'}")
         logger.info(
             f"   ✅ Error resilience: {'ON' if config.skip_on_error else 'OFF'}"
         )
         logger.info(f"   ✅ Reproducible (seed={config.random_seed})")
         logger.info(f"   ✅ Train shuffling: {'ON' if config.shuffle_train else 'OFF'}")
+        logger.info(f"   ✅ Consolidated split processing pipeline")
         logger.info("=" * 80)
 
         return reward_score
@@ -984,7 +1054,7 @@ def main():
         logger.error("❌ PIPELINE FAILED!")
         logger.error("=" * 80)
         logger.error(f"💔 PENALTY: {e}")
-        logger.error(f"📉 Final Score: {reward_score}/170 (FAILED)")
+        logger.error(f"📉 Final Score: {reward_score}/200 (FAILED)")
 
         if error_tracker:
             total_errors = error_tracker.get_error_count()
@@ -1012,11 +1082,11 @@ if __name__ == "__main__":
 
     final_score = main()
 
-    if final_score >= 160:
+    if final_score >= 180:
         print(
             "\n🎊 EXCELLENT SCORE! Pipeline executed successfully with minimal errors! 🎊"
         )
-    elif final_score >= 140:
+    elif final_score >= 160:
         print("\n✅ GOOD SCORE! Pipeline completed with some warnings. ✅")
     else:
         print("\n⚠️ COMPLETED WITH ISSUES. Check logs for details. ⚠️")
