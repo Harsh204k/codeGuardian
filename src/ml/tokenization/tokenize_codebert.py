@@ -586,49 +586,41 @@ def tokenize_dataset_batch(
     if len(all_code) == 0:
         raise ValueError(f"No valid samples in {split_name}")
 
-    # FAST BATCH TOKENIZATION - tokenize everything at once!
-    logger.info(f"⚡ Batch tokenizing {len(all_code)} samples (this is MUCH faster)...")
+    # CHUNKED BATCH TOKENIZATION - process in chunks to avoid OOM
+    chunk_size = 10000  # Process 10k samples at a time
+    num_chunks = (len(all_code) + chunk_size - 1) // chunk_size
+
+    logger.info(f"⚡ Batch tokenizing in {num_chunks} chunks of {chunk_size} samples...")
+
+    all_input_ids = []
+    all_attention_masks = []
 
     try:
-        # Tokenize all samples in one call - this is 10-50x faster!
-        padding_strategy = "max_length" if not config.dynamic_padding else "longest"
+        padding_strategy = "max_length"  # Always use max_length for consistent shapes
 
-        encodings = tokenizer(
-            all_code,
-            max_length=config.max_seq_length,
-            padding=padding_strategy,
-            truncation=config.truncation,
-            return_attention_mask=config.return_attention_mask,
-            return_tensors="pt",  # Return PyTorch tensors
-        )
+        for i in tqdm(range(0, len(all_code), chunk_size), desc=f"Tokenizing {split_name}"):
+            chunk_code = all_code[i:i + chunk_size]
 
-        # Convert to tensors
+            # Tokenize this chunk
+            encodings = tokenizer(
+                chunk_code,
+                max_length=config.max_seq_length,
+                padding=padding_strategy,
+                truncation=config.truncation,
+                return_attention_mask=config.return_attention_mask,
+                return_tensors="pt",  # Return PyTorch tensors
+            )
+
+            all_input_ids.append(encodings["input_ids"])
+            all_attention_masks.append(encodings["attention_mask"])
+
+        # Concatenate all chunks
+        logger.info(f"� Concatenating {len(all_input_ids)} chunks...")
         tokenized_data = {
-            "input_ids": encodings["input_ids"],
-            "attention_mask": encodings["attention_mask"],
+            "input_ids": torch.cat(all_input_ids, dim=0),
+            "attention_mask": torch.cat(all_attention_masks, dim=0),
             "labels": torch.tensor(all_labels, dtype=torch.long),
         }
-
-        # Pad to max_seq_length if dynamic padding was used
-        if (
-            config.dynamic_padding
-            and tokenized_data["input_ids"].shape[1] < config.max_seq_length
-        ):
-            current_len = tokenized_data["input_ids"].shape[1]
-            padding_len = config.max_seq_length - current_len
-
-            logger.info(
-                f"📏 Padding from {current_len} to {config.max_seq_length} tokens..."
-            )
-
-            tokenized_data["input_ids"] = torch.nn.functional.pad(
-                tokenized_data["input_ids"],
-                (0, padding_len),
-                value=tokenizer.pad_token_id,
-            )
-            tokenized_data["attention_mask"] = torch.nn.functional.pad(
-                tokenized_data["attention_mask"], (0, padding_len), value=0
-            )
 
         # Log statistics
         error_count = len(failed_indices)
@@ -646,13 +638,9 @@ def tokenize_dataset_batch(
         )
         logger.info(f"   Labels shape: {tokenized_data['labels'].shape}")
 
-        # Dynamic padding stats
-        if config.dynamic_padding:
-            actual_lengths = (tokenized_data["attention_mask"].sum(dim=1)).tolist()
-            avg_length = sum(actual_lengths) / len(actual_lengths)
-            logger.info(
-                f"   Avg sequence length: {avg_length:.1f} (dynamic padding saved {(1 - avg_length / config.max_seq_length) * 100:.1f}% space)"
-            )
+        # Memory usage info
+        input_ids_size_mb = tokenized_data["input_ids"].element_size() * tokenized_data["input_ids"].nelement() / (1024 * 1024)
+        logger.info(f"   Memory usage: ~{input_ids_size_mb * 3:.1f} MB (input_ids + attention_mask + labels)")
 
         return tokenized_data
 
