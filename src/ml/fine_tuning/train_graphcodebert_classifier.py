@@ -105,7 +105,7 @@ print(f"\n🔧 Loading pretrained model: {MODEL_NAME}")
 model = RobertaForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2)
 
 # Enable gradient checkpointing to save memory and allow larger batches
-if hasattr(model, 'gradient_checkpointing_enable'):
+if hasattr(model, "gradient_checkpointing_enable"):
     model.gradient_checkpointing_enable()
     print("✅ Gradient checkpointing enabled")
 
@@ -184,7 +184,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, scaler, device):
     all_labels = []
 
     progress_bar = tqdm(dataloader, desc="Training", leave=False)
-    
+
     # Pre-allocate lists for better performance
     optimizer.zero_grad(set_to_none=True)  # Faster than zero_grad()
 

@@ -184,7 +184,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, scaler, device):
     all_labels = []
 
     progress_bar = tqdm(dataloader, desc="Training", leave=False)
-    
+
     # Pre-allocate lists for better performance
     optimizer.zero_grad(set_to_none=True)  # Faster than zero_grad()
 
@@ -211,22 +211,6 @@ def train_epoch(model, dataloader, optimizer, scheduler, scaler, device):
             scaler.update()
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)  # Faster reset
-
-        total_loss += loss.item() * GRADIENT_ACCUMULATION_STEPS
-
-        # Compute predictions (detach to save memory)
-        with torch.no_grad():
-            preds = torch.argmax(outputs.logits, dim=1)
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-
-        progress_bar.set_postfix(
-            {"loss": f"{loss.item() * GRADIENT_ACCUMULATION_STEPS:.4f}"}
-        )
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
-            optimizer.zero_grad()
 
         total_loss += loss.item() * GRADIENT_ACCUMULATION_STEPS
 
