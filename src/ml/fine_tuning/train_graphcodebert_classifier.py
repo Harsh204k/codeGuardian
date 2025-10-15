@@ -26,14 +26,14 @@ KAGGLE_INPUT_PATH = (
 CHECKPOINT_DIR = "/kaggle/working/checkpoints/graphcodebert"
 MODEL_NAME = "microsoft/graphcodebert-base"
 
-# Optimized hyperparameters for speed
-BATCH_SIZE = 32  # Increased from 8 for better GPU utilization
+# ULTRA-OPTIMIZED hyperparameters for maximum speed
+BATCH_SIZE = 64  # Maximum batch size for T4 GPU (was 32)
 GRADIENT_ACCUMULATION_STEPS = 1  # Can increase if OOM
 LEARNING_RATE = 2e-5
 NUM_EPOCHS = 3
 MAX_LENGTH = 512
 SEED = 42
-NUM_WORKERS = 2  # Parallel data loading
+NUM_WORKERS = 4  # Increased parallel data loading (was 2)
 
 # Set seed for reproducibility
 torch.manual_seed(SEED)
@@ -103,6 +103,12 @@ print(f"✅ Test samples: {len(test_dataset)}")
 # ========================================
 print(f"\n🔧 Loading pretrained model: {MODEL_NAME}")
 model = RobertaForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2)
+
+# Enable gradient checkpointing to save memory and allow larger batches
+if hasattr(model, 'gradient_checkpointing_enable'):
+    model.gradient_checkpointing_enable()
+    print("✅ Gradient checkpointing enabled")
+
 model.to(device)
 
 # ========================================
@@ -178,6 +184,9 @@ def train_epoch(model, dataloader, optimizer, scheduler, scaler, device):
     all_labels = []
 
     progress_bar = tqdm(dataloader, desc="Training", leave=False)
+    
+    # Pre-allocate lists for better performance
+    optimizer.zero_grad(set_to_none=True)  # Faster than zero_grad()
 
     for batch_idx, batch in enumerate(progress_bar):
         input_ids, attention_mask, labels = [
@@ -201,7 +210,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, scaler, device):
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)  # Faster reset
 
         total_loss += loss.item() * GRADIENT_ACCUMULATION_STEPS
 
