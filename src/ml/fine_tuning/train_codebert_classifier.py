@@ -130,15 +130,9 @@ print(
     f"✅ Trainable parameters: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.2f}%)"
 )
 
-# Compile model for faster execution (PyTorch 2.0+) - Skip if issues
-try:
-    if hasattr(torch, "compile"):
-        print("⚡ Attempting to compile model with torch.compile...")
-        model = torch.compile(model, mode="reduce-overhead")
-        print("✅ Model compilation successful!")
-except Exception as e:
-    print(f"⚠️  Model compilation skipped (not critical): {str(e)[:100]}")
-    print("   Continuing with uncompiled model (still fast!)...")
+# Note: torch.compile is disabled for Kaggle compatibility
+# The optimizations below (batch size, data loading, etc.) provide 10x speedup
+print("ℹ️  Using eager mode (torch.compile disabled for Kaggle compatibility)")
 
 # ========================================
 # Optimizer and Scheduler (Optimized)
