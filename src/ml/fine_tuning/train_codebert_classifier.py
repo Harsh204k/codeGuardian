@@ -130,23 +130,41 @@ print(
     f"✅ Trainable parameters: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.2f}%)"
 )
 
-# Compile model for faster execution (PyTorch 2.0+)
-if hasattr(torch, "compile"):
-    print("⚡ Compiling model with torch.compile for faster execution...")
-    model = torch.compile(model, mode="reduce-overhead")
+# Compile model for faster execution (PyTorch 2.0+) - Skip if issues
+try:
+    if hasattr(torch, "compile"):
+        print("⚡ Attempting to compile model with torch.compile...")
+        model = torch.compile(model, mode="reduce-overhead")
+        print("✅ Model compilation successful!")
+except Exception as e:
+    print(f"⚠️  Model compilation skipped (not critical): {str(e)[:100]}")
+    print("   Continuing with uncompiled model (still fast!)...")
 
 # ========================================
 # Optimizer and Scheduler (Optimized)
 # ========================================
 # Use PyTorch native AdamW (faster than transformers version)
-optimizer = torch.optim.AdamW(
-    filter(lambda p: p.requires_grad, model.parameters()),
-    lr=LEARNING_RATE,
-    betas=(0.9, 0.999),
-    eps=1e-8,
-    weight_decay=0.01,
-    fused=True if torch.cuda.is_available() else False,  # Fused AdamW for speed
-)
+# Try fused optimizer first, fall back to standard if not available
+try:
+    optimizer = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=LEARNING_RATE,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01,
+        fused=True,  # Fused AdamW for speed
+    )
+    print("✅ Using fused AdamW optimizer")
+except Exception:
+    optimizer = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=LEARNING_RATE,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01,
+    )
+    print("✅ Using standard AdamW optimizer")
+
 total_steps = len(train_loader) * NUM_EPOCHS // GRADIENT_ACCUMULATION_STEPS
 scheduler = get_linear_schedule_with_warmup(
     optimizer, num_warmup_steps=int(0.1 * total_steps), num_training_steps=total_steps
