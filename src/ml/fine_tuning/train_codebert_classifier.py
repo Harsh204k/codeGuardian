@@ -91,11 +91,16 @@ print("\n🔒 Freezing all layers except final classifier...")
 for param in model.roberta.parameters():
     param.requires_grad = False
 
-# Replace and ensure classifier is trainable
-model.classifier = nn.Linear(768, 2)
-model.classifier.to(device)
+# Freeze the original classifier layers except the final projection
+# The RoBERTa classifier has: dense -> dropout -> out_proj
+# We'll freeze dense and only train out_proj (final layer)
+for name, param in model.classifier.named_parameters():
+    if "out_proj" not in name:  # Freeze dense layer
+        param.requires_grad = False
+    else:  # Keep out_proj trainable
+        param.requires_grad = True
 
-# Verify only classifier is trainable
+# Verify only final layer is trainable
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 total_params = sum(p.numel() for p in model.parameters())
 print(
