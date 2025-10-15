@@ -30,12 +30,13 @@ EMBEDDINGS_DIR = "/kaggle/working/embeddings/codebert"
 MODEL_NAME = "microsoft/codebert-base"
 
 # ULTRA-OPTIMIZED hyperparameters for maximum speed
-EMBEDDING_BATCH_SIZE = 128  # Larger batch for embedding extraction (no gradients)
+EMBEDDING_BATCH_SIZE = 256  # FP16 allows larger batches (halves memory)
 TRAINING_BATCH_SIZE = 512  # Much larger for linear classifier training
 LEARNING_RATE = 2e-3  # Higher LR for linear classifier (not pretrained model)
 NUM_EPOCHS = 3
 SEED = 42
 NUM_WORKERS = 4
+CHUNK_SIZE = 50000  # Save embeddings in chunks to avoid OOM
 
 # Set seed for reproducibility
 torch.manual_seed(SEED)
