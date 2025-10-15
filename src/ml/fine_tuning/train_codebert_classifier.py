@@ -52,9 +52,9 @@ os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 # ========================================
 print("📂 Loading tokenized datasets...")
 
-train_data = torch.load(f"{KAGGLE_INPUT_PATH}/train.pt")
-val_data = torch.load(f"{KAGGLE_INPUT_PATH}/val.pt")
-test_data = torch.load(f"{KAGGLE_INPUT_PATH}/test.pt")
+train_data = torch.load(f"{KAGGLE_INPUT_PATH}/train_codebert_classifier.pt")
+val_data = torch.load(f"{KAGGLE_INPUT_PATH}/val_codebert_classifier.pt")
+test_data = torch.load(f"{KAGGLE_INPUT_PATH}/test_codebert_classifier.pt")
 
 # Extract tensors
 train_dataset = TensorDataset(
