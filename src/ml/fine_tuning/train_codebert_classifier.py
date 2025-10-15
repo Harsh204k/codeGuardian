@@ -9,7 +9,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import (
     RobertaForSequenceClassification,
-    AdamW,
     get_linear_schedule_with_warmup,
 )
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
@@ -27,11 +26,14 @@ KAGGLE_INPUT_PATH = (
 CHECKPOINT_DIR = "/kaggle/working/checkpoints/codebert"
 MODEL_NAME = "microsoft/codebert-base"
 
-BATCH_SIZE = 8
+# Optimized hyperparameters for speed
+BATCH_SIZE = 32  # Increased from 8 for better GPU utilization
+GRADIENT_ACCUMULATION_STEPS = 1  # Can increase if OOM
 LEARNING_RATE = 2e-5
 NUM_EPOCHS = 3
 MAX_LENGTH = 512
 SEED = 42
+NUM_WORKERS = 2  # Parallel data loading
 
 # Set seed for reproducibility
 torch.manual_seed(SEED)
@@ -67,9 +69,30 @@ test_dataset = TensorDataset(
     test_data["input_ids"], test_data["attention_mask"], test_data["labels"]
 )
 
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+# Optimized DataLoaders with parallel loading and memory pinning
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=NUM_WORKERS,
+    pin_memory=True,
+    persistent_workers=True if NUM_WORKERS > 0 else False,
+)
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE * 2,  # Larger batch for evaluation
+    shuffle=False,
+    num_workers=NUM_WORKERS,
+    pin_memory=True,
+    persistent_workers=True if NUM_WORKERS > 0 else False,
+)
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE * 2,
+    shuffle=False,
+    num_workers=NUM_WORKERS,
+    pin_memory=True,
+)
 
 print(f"✅ Train samples: {len(train_dataset)}")
 print(f"✅ Validation samples: {len(val_dataset)}")
@@ -107,23 +130,34 @@ print(
     f"✅ Trainable parameters: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.2f}%)"
 )
 
+# Compile model for faster execution (PyTorch 2.0+)
+if hasattr(torch, "compile"):
+    print("⚡ Compiling model with torch.compile for faster execution...")
+    model = torch.compile(model, mode="reduce-overhead")
+
 # ========================================
-# Optimizer and Scheduler
+# Optimizer and Scheduler (Optimized)
 # ========================================
-optimizer = AdamW(
-    filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE
+# Use PyTorch native AdamW (faster than transformers version)
+optimizer = torch.optim.AdamW(
+    filter(lambda p: p.requires_grad, model.parameters()),
+    lr=LEARNING_RATE,
+    betas=(0.9, 0.999),
+    eps=1e-8,
+    weight_decay=0.01,
+    fused=True if torch.cuda.is_available() else False,  # Fused AdamW for speed
 )
-total_steps = len(train_loader) * NUM_EPOCHS
+total_steps = len(train_loader) * NUM_EPOCHS // GRADIENT_ACCUMULATION_STEPS
 scheduler = get_linear_schedule_with_warmup(
     optimizer, num_warmup_steps=int(0.1 * total_steps), num_training_steps=total_steps
 )
 
-# Mixed precision training
-scaler = torch.cuda.amp.GradScaler() if torch.cuda.is_available() else None
+# Mixed precision training with optimized settings
+scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
 
 
 # ========================================
-# Training Function
+# Training Function (Optimized)
 # ========================================
 def train_epoch(model, dataloader, optimizer, scheduler, scaler, device):
     model.train()
@@ -133,36 +167,41 @@ def train_epoch(model, dataloader, optimizer, scheduler, scaler, device):
 
     progress_bar = tqdm(dataloader, desc="Training", leave=False)
 
-    for batch in progress_bar:
-        input_ids, attention_mask, labels = [b.to(device) for b in batch]
+    for batch_idx, batch in enumerate(progress_bar):
+        input_ids, attention_mask, labels = [
+            b.to(device, non_blocking=True) for b in batch
+        ]
 
-        optimizer.zero_grad()
-
-        if scaler:
-            with torch.cuda.amp.autocast():
-                outputs = model(
-                    input_ids=input_ids, attention_mask=attention_mask, labels=labels
-                )
-                loss = outputs.loss
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
+        # Mixed precision forward pass
+        with torch.cuda.amp.autocast():
             outputs = model(
                 input_ids=input_ids, attention_mask=attention_mask, labels=labels
             )
-            loss = outputs.loss
-            loss.backward()
-            optimizer.step()
+            loss = outputs.loss / GRADIENT_ACCUMULATION_STEPS
 
-        scheduler.step()
+        # Backward pass with gradient scaling
+        scaler.scale(loss).backward()
 
-        total_loss += loss.item()
-        preds = torch.argmax(outputs.logits, dim=1)
-        all_preds.extend(preds.cpu().numpy())
-        all_labels.extend(labels.cpu().numpy())
+        # Gradient accumulation
+        if (batch_idx + 1) % GRADIENT_ACCUMULATION_STEPS == 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            optimizer.zero_grad()
 
-        progress_bar.set_postfix({"loss": loss.item()})
+        total_loss += loss.item() * GRADIENT_ACCUMULATION_STEPS
+
+        # Compute predictions (detach to save memory)
+        with torch.no_grad():
+            preds = torch.argmax(outputs.logits, dim=1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+        progress_bar.set_postfix(
+            {"loss": f"{loss.item() * GRADIENT_ACCUMULATION_STEPS:.4f}"}
+        )
 
     avg_loss = total_loss / len(dataloader)
     accuracy = accuracy_score(all_labels, all_preds)
@@ -172,7 +211,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, scaler, device):
 
 
 # ========================================
-# Evaluation Function
+# Evaluation Function (Optimized)
 # ========================================
 def evaluate(model, dataloader, device):
     model.eval()
@@ -182,9 +221,11 @@ def evaluate(model, dataloader, device):
 
     progress_bar = tqdm(dataloader, desc="Evaluating", leave=False)
 
-    with torch.no_grad():
+    with torch.no_grad(), torch.cuda.amp.autocast():
         for batch in progress_bar:
-            input_ids, attention_mask, labels = [b.to(device) for b in batch]
+            input_ids, attention_mask, labels = [
+                b.to(device, non_blocking=True) for b in batch
+            ]
 
             outputs = model(
                 input_ids=input_ids, attention_mask=attention_mask, labels=labels
