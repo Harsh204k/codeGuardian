@@ -321,7 +321,7 @@ def train_epoch(
 
         # Forward pass with BF16
         if config.USE_BF16:
-            with autocast(device_type="cuda", dtype=torch.bfloat16):
+            with autocast(enabled=True, dtype=torch.bfloat16):
                 logits = model(input_ids, attention_mask)
                 loss = criterion(logits, labels)
                 loss = loss / accumulation_steps  # Scale loss for accumulation
@@ -389,7 +389,7 @@ def evaluate(model, data_loader, config: Config, split_name: str):
 
             # Forward pass with BF16
             if config.USE_BF16:
-                with autocast(device_type="cuda", dtype=torch.bfloat16):
+                with autocast(enabled=True, dtype=torch.bfloat16):
                     logits = model(input_ids, attention_mask)
                     loss = criterion(logits, labels)
             else:
