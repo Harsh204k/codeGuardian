@@ -111,7 +111,7 @@ class Config:
     TEST_FILE = "test_tokenized_codebert.pt"
 
     # Output paths
-    CHECKPOINT_DIR = "/kaggle/working/checkpoints"
+    CHECKPOINT_DIR = "/kaggle/working/fine-tuning"
     MODEL_SAVE_PATH = f"{CHECKPOINT_DIR}/codebert_final_layer.pt"
     METRICS_SAVE_PATH = f"{CHECKPOINT_DIR}/codebert_eval_metrics.json"
 
@@ -621,14 +621,21 @@ def train(config: Config):
 
     # Check for existing checkpoint to resume from
     resume_checkpoint = None
-    for epoch_num in range(config.EPOCHS, 0, -1):
-        checkpoint_path = os.path.join(
-            config.CHECKPOINT_DIR, f"codebert_lora_epoch_{epoch_num}.pt"
-        )
-        if os.path.exists(checkpoint_path):
-            resume_checkpoint = checkpoint_path
-            start_epoch = epoch_num + 1
-            break
+
+    # First check if best model exists (training complete)
+    if os.path.exists(config.MODEL_SAVE_PATH):
+        resume_checkpoint = config.MODEL_SAVE_PATH
+        start_epoch = config.EPOCHS + 1  # Mark as complete
+    else:
+        # Check for epoch checkpoints
+        for epoch_num in range(config.EPOCHS, 0, -1):
+            checkpoint_path = os.path.join(
+                config.CHECKPOINT_DIR, f"codebert_lora_epoch_{epoch_num}.pt"
+            )
+            if os.path.exists(checkpoint_path):
+                resume_checkpoint = checkpoint_path
+                start_epoch = epoch_num + 1
+                break
 
     # Resume from checkpoint if found
     if resume_checkpoint and start_epoch <= config.EPOCHS:
