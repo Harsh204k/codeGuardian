@@ -5,8 +5,14 @@ This script loads a saved checkpoint from training and runs final test evaluatio
 Use this to salvage training results after the PyTorch 2.6 weights_only bug.
 
 Usage:
-    python eval_saved_checkpoint.py --model codebert --checkpoint /kaggle/working/checkpoints/codebert_best_model.pt
-    python eval_saved_checkpoint.py --model graphcodebert --checkpoint /kaggle/working/checkpoints/graphcodebert_best_model.pt
+    # First, find available checkpoints
+    python eval_saved_checkpoint.py --find-checkpoints
+    
+    # Then use the checkpoint path shown
+    python eval_saved_checkpoint.py --model codebert --checkpoint <path_from_above>
+    
+    # Or let it auto-find the latest checkpoint
+    python eval_saved_checkpoint.py --model codebert --auto
 """
 
 import argparse
@@ -14,6 +20,8 @@ import os
 import sys
 import gc
 import torch
+from pathlib import Path
+import glob
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import RobertaForSequenceClassification
 from peft import LoraConfig, get_peft_model
@@ -25,6 +33,111 @@ from sklearn.metrics import (
     f1_score,
     confusion_matrix,
 )
+
+# =============================================================================
+# CHECKPOINT FINDER
+# =============================================================================
+
+
+def find_all_checkpoints():
+    """
+    Search for all checkpoint files in common locations
+    
+    Returns:
+        List of tuples: (checkpoint_path, file_size_mb, modified_time)
+    """
+    print(f"\n{'='*70}")
+    print("SEARCHING FOR CHECKPOINT FILES")
+    print(f"{'='*70}")
+    
+    search_patterns = [
+        "/kaggle/working/**/*.pt",
+        "/kaggle/working/**/*.pth",
+        "/kaggle/working/checkpoints/**/*",
+        "/kaggle/input/**/*.pt",
+        "/kaggle/input/**/*.pth",
+        "./**/*.pt",
+        "./**/*.pth",
+    ]
+    
+    found_checkpoints = []
+    
+    for pattern in search_patterns:
+        try:
+            for file_path in glob.glob(pattern, recursive=True):
+                if os.path.isfile(file_path):
+                    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                    modified_time = os.path.getmtime(file_path)
+                    found_checkpoints.append((file_path, size_mb, modified_time))
+        except:
+            pass
+    
+    # Remove duplicates and sort by modified time (newest first)
+    seen = set()
+    unique_checkpoints = []
+    for cp in found_checkpoints:
+        if cp[0] not in seen:
+            seen.add(cp[0])
+            unique_checkpoints.append(cp)
+    
+    unique_checkpoints.sort(key=lambda x: x[2], reverse=True)
+    
+    if unique_checkpoints:
+        print(f"\n✓ Found {len(unique_checkpoints)} checkpoint file(s):\n")
+        for i, (path, size_mb, mtime) in enumerate(unique_checkpoints, 1):
+            from datetime import datetime
+            mod_time_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            print(f"{i}. {path}")
+            print(f"   Size: {size_mb:.2f} MB | Modified: {mod_time_str}")
+            print()
+    else:
+        print("\n❌ No checkpoint files found!")
+        print("\nSearched in:")
+        print("  - /kaggle/working/")
+        print("  - /kaggle/input/")
+        print("  - Current directory")
+    
+    return unique_checkpoints
+
+
+def auto_find_checkpoint(model_type):
+    """
+    Automatically find the best checkpoint for the given model type
+    
+    Args:
+        model_type: 'codebert' or 'graphcodebert'
+    
+    Returns:
+        Path to checkpoint or None
+    """
+    print(f"\n{'='*70}")
+    print(f"AUTO-FINDING {model_type.upper()} CHECKPOINT")
+    print(f"{'='*70}")
+    
+    all_checkpoints = find_all_checkpoints()
+    
+    if not all_checkpoints:
+        return None
+    
+    # Filter by model type
+    model_checkpoints = [
+        cp for cp in all_checkpoints 
+        if model_type.lower() in cp[0].lower() or 'best' in cp[0].lower()
+    ]
+    
+    if model_checkpoints:
+        best_checkpoint = model_checkpoints[0][0]  # First one (newest)
+        print(f"\n✓ Auto-selected: {best_checkpoint}")
+        return best_checkpoint
+    
+    # Fallback: use the largest checkpoint
+    if all_checkpoints:
+        largest_checkpoint = max(all_checkpoints, key=lambda x: x[1])[0]
+        print(f"\n✓ Auto-selected (largest): {largest_checkpoint}")
+        return largest_checkpoint
+    
+    return None
+
 
 # =============================================================================
 # CONFIGURATION
@@ -186,6 +299,40 @@ def load_checkpoint(model, checkpoint_path):
     print(f"{'='*70}")
 
     if not os.path.exists(checkpoint_path):
+        # Try to find checkpoint files
+        print(f"❌ Checkpoint not found at: {checkpoint_path}")
+        print("\n🔍 Searching for available checkpoints...")
+        
+        # Search in common locations
+        search_dirs = [
+            "/kaggle/working/checkpoints",
+            "/kaggle/working",
+            os.path.dirname(checkpoint_path) if checkpoint_path else None
+        ]
+        
+        found_checkpoints = []
+        for search_dir in search_dirs:
+            if search_dir and os.path.exists(search_dir):
+                print(f"\nSearching in: {search_dir}")
+                for file in os.listdir(search_dir):
+                    if file.endswith('.pt') or file.endswith('.pth'):
+                        full_path = os.path.join(search_dir, file)
+                        size_mb = os.path.getsize(full_path) / (1024 * 1024)
+                        found_checkpoints.append((full_path, size_mb))
+                        print(f"  ✓ Found: {file} ({size_mb:.2f} MB)")
+        
+        if found_checkpoints:
+            print(f"\n💡 Found {len(found_checkpoints)} checkpoint file(s)")
+            print("\nTo use a checkpoint, run:")
+            for cp_path, size_mb in found_checkpoints:
+                print(f"  python eval_saved_checkpoint.py --model codebert --checkpoint {cp_path}")
+        else:
+            print("\n❌ No checkpoint files found!")
+            print("Expected locations checked:")
+            for search_dir in search_dirs:
+                if search_dir:
+                    print(f"  - {search_dir}")
+        
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     # Load with weights_only=False to allow numpy objects
@@ -238,7 +385,9 @@ def evaluate(model, dataloader, device):
         input_ids, attention_mask, labels = [b.to(device) for b in batch]
 
         # Forward pass
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        outputs = model(
+            input_ids=input_ids, attention_mask=attention_mask, labels=labels
+        )
 
         # Collect predictions
         preds = torch.argmax(outputs.logits, dim=1)
@@ -291,14 +440,35 @@ def evaluate(model, dataloader, device):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Emergency evaluation of saved checkpoint"
+        description="Emergency evaluation of saved checkpoint",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Find all available checkpoints
+  python eval_saved_checkpoint.py --find-checkpoints
+  
+  # Auto-find and use latest checkpoint
+  python eval_saved_checkpoint.py --model codebert --auto
+  
+  # Use specific checkpoint
+  python eval_saved_checkpoint.py --model codebert --checkpoint /path/to/checkpoint.pt
+        """
+    )
+    parser.add_argument(
+        "--find-checkpoints",
+        action="store_true",
+        help="Search for all available checkpoint files and exit",
     )
     parser.add_argument(
         "--model",
         type=str,
         choices=["codebert", "graphcodebert"],
-        required=True,
         help="Model type: codebert or graphcodebert",
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Automatically find and use the latest checkpoint",
     )
     parser.add_argument(
         "--checkpoint",
@@ -312,12 +482,38 @@ def main():
     )
 
     args = parser.parse_args()
+    
+    # Handle find-checkpoints mode
+    if args.find_checkpoints:
+        find_all_checkpoints()
+        print(f"\n{'='*70}")
+        print("💡 USAGE")
+        print(f"{'='*70}")
+        print("\nTo evaluate a checkpoint, run:")
+        print("  python eval_saved_checkpoint.py --model <codebert|graphcodebert> --checkpoint <path>")
+        print("\nOr auto-find the latest checkpoint:")
+        print("  python eval_saved_checkpoint.py --model <codebert|graphcodebert> --auto")
+        return
+    
+    # Require model for evaluation
+    if not args.model:
+        parser.error("--model is required (unless using --find-checkpoints)")
 
     # Select config
     if args.model == "codebert":
         config = CodeBERTConfig()
     else:
         config = GraphCodeBERTConfig()
+    
+    # Auto-find checkpoint if requested
+    if args.auto:
+        auto_checkpoint = auto_find_checkpoint(args.model)
+        if auto_checkpoint:
+            config.CHECKPOINT_PATH = auto_checkpoint
+        else:
+            print("\n❌ Could not auto-find checkpoint!")
+            print("Run with --find-checkpoints to see available checkpoints")
+            sys.exit(1)
 
     # Override paths if provided
     if args.checkpoint:
@@ -337,7 +533,9 @@ def main():
 
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        print(
+            f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
+        )
 
     try:
         # Load test dataset

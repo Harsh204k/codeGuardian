@@ -10,7 +10,7 @@ Your 5-hour training completed successfully with excellent results (Val F1: 0.80
 
 Our checkpoints contain numpy scalars from sklearn metrics, causing this error:
 ```
-_pickle.UnpicklingError: Weights only load failed. 
+_pickle.UnpicklingError: Weights only load failed.
 numpy.core.multiarray.scalar was not an allowed global
 ```
 
@@ -74,7 +74,7 @@ python src/ml/fine_tuning/train_codebert_lora.py
 All checkpoints are saved and valid:
 ```
 ✅ Epoch 1: Val F1 0.7364
-✅ Epoch 2: Val F1 0.7796  
+✅ Epoch 2: Val F1 0.7796
 ✅ Epoch 3: Val F1 0.8059 (BEST)
 ✅ Final Training F1: 0.7120
 ```
