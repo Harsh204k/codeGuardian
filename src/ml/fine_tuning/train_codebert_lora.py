@@ -40,6 +40,22 @@ warnings.filterwarnings("ignore")
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 
+# Detect BFloat16 support
+def check_bf16_support():
+    """Check if current GPU supports BFloat16"""
+    if not torch.cuda.is_available():
+        return False
+    try:
+        # Check compute capability (BF16 requires >= 8.0, Ampere or newer)
+        capability = torch.cuda.get_device_capability()
+        major, minor = capability
+        # BF16 is supported on Ampere (8.0+) and newer
+        return major >= 8
+    except Exception:
+        return False
+
+BF16_SUPPORTED = check_bf16_support()
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -84,7 +100,9 @@ class Config:
 
     # Device and precision
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    USE_BF16 = True  # BFloat16 for better stability
+    USE_MIXED_PRECISION = True  # Enable mixed precision training
+    # Auto-detect precision: BF16 if supported (Ampere+), else FP16
+    PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16
 
     # Monitoring
     LOG_INTERVAL = 50
@@ -319,9 +337,9 @@ def train_epoch(
         attention_mask = batch[1].to(config.DEVICE)
         labels = batch[2].to(config.DEVICE)
 
-        # Forward pass with BF16
-        if config.USE_BF16:
-            with autocast(enabled=True, dtype=torch.bfloat16):
+        # Forward pass with mixed precision (BF16 or FP16)
+        if config.USE_MIXED_PRECISION:
+            with autocast(enabled=True, dtype=config.PRECISION_DTYPE):
                 logits = model(input_ids, attention_mask)
                 loss = criterion(logits, labels)
                 loss = loss / accumulation_steps  # Scale loss for accumulation
@@ -387,9 +405,9 @@ def evaluate(model, data_loader, config: Config, split_name: str):
             attention_mask = batch[1].to(config.DEVICE)
             labels = batch[2].to(config.DEVICE)
 
-            # Forward pass with BF16
-            if config.USE_BF16:
-                with autocast(enabled=True, dtype=torch.bfloat16):
+            # Forward pass with mixed precision (BF16 or FP16)
+            if config.USE_MIXED_PRECISION:
+                with autocast(enabled=True, dtype=config.PRECISION_DTYPE):
                     logits = model(input_ids, attention_mask)
                     loss = criterion(logits, labels)
             else:
@@ -423,7 +441,14 @@ def train(config: Config):
     print("CODEGUARDIAN - CODEBERT FINE-TUNING WITH LORA (OPTIMIZED)")
     print("=" * 70)
     print(f"Device: {config.DEVICE}")
-    print(f"Precision: BF16" if config.USE_BF16 else "FP32")
+
+    # Display precision info
+    if config.USE_MIXED_PRECISION:
+        precision_name = "BFloat16" if config.PRECISION_DTYPE == torch.bfloat16 else "Float16"
+        print(f"Precision: {precision_name} (Mixed Precision)")
+    else:
+        print(f"Precision: Float32")
+
     print(f"Train Batch Size: {config.TRAIN_BATCH_SIZE}")
     print(f"Eval Batch Size: {config.EVAL_BATCH_SIZE}")
     print(f"Gradient Accumulation: {config.GRADIENT_ACCUMULATION_STEPS}x")
@@ -439,6 +464,9 @@ def train(config: Config):
         print(
             f"  - Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
         )
+        capability = torch.cuda.get_device_capability()
+        print(f"  - Compute Capability: {capability[0]}.{capability[1]}")
+        print(f"  - BFloat16 Support: {'Yes' if BF16_SUPPORTED else 'No (using FP16)'}")
 
     # Create checkpoint directory
     os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
@@ -464,8 +492,8 @@ def train(config: Config):
         num_training_steps=num_training_steps,
     )
 
-    # Setup gradient scaler for BF16
-    scaler = GradScaler() if config.USE_BF16 else None
+    # Setup gradient scaler for mixed precision
+    scaler = GradScaler() if config.USE_MIXED_PRECISION else None
 
     # Training tracking
     best_f1 = 0.0

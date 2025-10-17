@@ -5,16 +5,22 @@ Kaggle-Ready GraphCodeBERT Fine-Tuning Script with LoRA (Optimized)
 ====================================================================
 
 This script fine-tunes ONLY the final classification layer of GraphCodeBERT for
-code vulnerability detection using LoRA/PEFT on Kaggle's free GPU (T4).
+code vulnerability detection using LoRA/PEFT on Kaggle's free GPU (T4/P100).
 
 Optimizations:
-- BF16 mixed precision for better numerical stability
+- Auto-detected mixed precision (BF16 on Ampere+, FP16 on older GPUs)
 - torch.compile for faster execution
 - Gradient accumulation for effective larger batch size
 - Linear warmup scheduler
 - Persistent workers and prefetch in DataLoader
 - Expanded LoRA targets (classifier + last encoder layer)
 - TF32 and cuDNN benchmarking enabled
+- GPU capability detection for hardware compatibility
+
+Hardware Support:
+- T4 (Turing, compute 7.5): Uses FP16
+- P100 (Pascal, compute 6.0): Uses FP16
+- A100 (Ampere, compute 8.0+): Uses BF16
 
 Author: CodeGuardian Team
 Date: October 2025
@@ -39,6 +45,23 @@ warnings.filterwarnings("ignore")
 # Enable TF32 for faster matmul on Ampere GPUs (T4 compatible)
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
+
+# ============================================================================
+# GPU CAPABILITY DETECTION
+# ============================================================================
+
+
+def check_bf16_support() -> bool:
+    """Check if current GPU supports BFloat16 (requires compute capability >= 8.0)"""
+    if not torch.cuda.is_available():
+        return False
+    capability = torch.cuda.get_device_capability()
+    # BFloat16 requires Ampere or newer (compute capability >= 8.0)
+    # T4 is 7.5 (Turing), P100 is 6.0 (Pascal) - both require FP16
+    return capability[0] >= 8
+
+
+BF16_SUPPORTED = check_bf16_support()
 
 # ============================================================================
 # CONFIGURATION
@@ -82,7 +105,8 @@ class Config:
 
     # Device and precision
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    USE_BF16 = True  # BFloat16 for better stability
+    USE_MIXED_PRECISION = True  # Enable mixed precision training
+    PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16  # Auto-select based on GPU
 
     # Monitoring
     LOG_INTERVAL = 50
@@ -317,9 +341,9 @@ def train_epoch(
         attention_mask = batch[1].to(config.DEVICE)
         labels = batch[2].to(config.DEVICE)
 
-        # Forward pass with BF16
-        if config.USE_BF16:
-            with autocast(enabled=True, dtype=torch.bfloat16):
+        # Forward pass with mixed precision
+        if config.USE_MIXED_PRECISION:
+            with autocast(enabled=True, dtype=config.PRECISION_DTYPE):
                 logits = model(input_ids, attention_mask)
                 loss = criterion(logits, labels)
                 loss = loss / accumulation_steps  # Scale loss for accumulation
@@ -385,9 +409,9 @@ def evaluate(model, data_loader, config: Config, split_name: str):
             attention_mask = batch[1].to(config.DEVICE)
             labels = batch[2].to(config.DEVICE)
 
-            # Forward pass with BF16
-            if config.USE_BF16:
-                with autocast(enabled=True, dtype=torch.bfloat16):
+            # Forward pass with mixed precision
+            if config.USE_MIXED_PRECISION:
+                with autocast(enabled=True, dtype=config.PRECISION_DTYPE):
                     logits = model(input_ids, attention_mask)
                     loss = criterion(logits, labels)
             else:
@@ -421,7 +445,14 @@ def train(config: Config):
     print("CODEGUARDIAN - GRAPHCODEBERT FINE-TUNING WITH LORA (OPTIMIZED)")
     print("=" * 70)
     print(f"Device: {config.DEVICE}")
-    print(f"Precision: BF16" if config.USE_BF16 else "FP32")
+
+    # Display precision info
+    if config.USE_MIXED_PRECISION:
+        precision_name = "BFloat16" if config.PRECISION_DTYPE == torch.bfloat16 else "Float16"
+        print(f"Precision: {precision_name} (Mixed Precision)")
+    else:
+        print(f"Precision: Float32")
+
     print(f"Train Batch Size: {config.TRAIN_BATCH_SIZE}")
     print(f"Eval Batch Size: {config.EVAL_BATCH_SIZE}")
     print(f"Gradient Accumulation: {config.GRADIENT_ACCUMULATION_STEPS}x")
@@ -437,6 +468,9 @@ def train(config: Config):
         print(
             f"  - Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
         )
+        capability = torch.cuda.get_device_capability()
+        print(f"  - Compute Capability: {capability[0]}.{capability[1]}")
+        print(f"  - BFloat16 Support: {'Yes' if BF16_SUPPORTED else 'No (using FP16)'}")
 
     # Create checkpoint directory
     os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
@@ -462,8 +496,8 @@ def train(config: Config):
         num_training_steps=num_training_steps,
     )
 
-    # Setup gradient scaler for BF16
-    scaler = GradScaler() if config.USE_BF16 else None
+    # Setup gradient scaler for mixed precision
+    scaler = GradScaler() if config.USE_MIXED_PRECISION else None
 
     # Training tracking
     best_f1 = 0.0
