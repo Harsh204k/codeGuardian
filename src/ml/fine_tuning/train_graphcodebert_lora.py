@@ -264,7 +264,7 @@ def load_tokenized_dataset(file_path: str, config: Config):
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Dataset not found: {file_path}")
 
-    data = torch.load(file_path, map_location="cpu")
+    data = torch.load(file_path, map_location="cpu", weights_only=False)
 
     # Extract tensors
     input_ids = data["input_ids"]
@@ -413,9 +413,11 @@ def initialize_model(config: Config):
     #     print("\n✓ Model compiled with torch.compile()")
     # except Exception as e:
     #     print(f"\n⚠ torch.compile() not available: {e}")
-    
+
     print("\n⚠️ torch.compile() disabled for PEFT compatibility")
-    print("   Training will still be optimized with mixed precision & gradient accumulation")
+    print(
+        "   Training will still be optimized with mixed precision & gradient accumulation"
+    )
 
     return model
 
@@ -619,14 +621,53 @@ def train(config: Config):
     # Training tracking
     best_f1 = 0.0
     training_history = {"train": [], "val": [], "test": None}
+    start_epoch = 1
+
+    # Check for existing checkpoint to resume from
+    resume_checkpoint = None
+    for epoch_num in range(config.EPOCHS, 0, -1):
+        checkpoint_path = os.path.join(
+            config.CHECKPOINT_DIR, f"graphcodebert_lora_epoch_{epoch_num}.pt"
+        )
+        if os.path.exists(checkpoint_path):
+            resume_checkpoint = checkpoint_path
+            start_epoch = epoch_num + 1
+            break
+
+    # Resume from checkpoint if found
+    if resume_checkpoint and start_epoch <= config.EPOCHS:
+        print("\n" + "=" * 70)
+        print(f"RESUMING FROM CHECKPOINT: {resume_checkpoint}")
+        print("=" * 70)
+        checkpoint = torch.load(resume_checkpoint, weights_only=False)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        best_f1 = checkpoint.get("best_f1", 0.0)
+        training_history = checkpoint.get(
+            "training_history", {"train": [], "val": [], "test": None}
+        )
+        print(f"✓ Resumed from epoch {start_epoch - 1}")
+        print(f"✓ Best F1 so far: {best_f1:.4f}")
+        print(f"✓ Continuing from epoch {start_epoch}")
+    elif resume_checkpoint:
+        print("\n" + "=" * 70)
+        print("TRAINING ALREADY COMPLETE")
+        print("=" * 70)
+        print(f"✓ All {config.EPOCHS} epochs already trained")
+        print(f"✓ Loading final model for evaluation")
+        checkpoint = torch.load(config.MODEL_SAVE_PATH, weights_only=False)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        best_f1 = checkpoint.get("best_f1", 0.0)
+        start_epoch = config.EPOCHS + 1  # Skip training loop
 
     print("\n" + "=" * 70)
-    print("STARTING TRAINING")
+    print("STARTING TRAINING" if start_epoch <= config.EPOCHS else "TRAINING SKIPPED")
     print("=" * 70)
 
     # Training loop
     epoch_times = []
-    for epoch in range(1, config.EPOCHS + 1):
+    for epoch in range(start_epoch, config.EPOCHS + 1):
         epoch_start = time.time()
 
         print(f"\n{'='*70}")
@@ -704,7 +745,7 @@ def train(config: Config):
         print(f"\n{'='*70}")
         print("LOADING BEST MODEL FOR FINAL EVALUATION")
         print(f"{'='*70}")
-        checkpoint = torch.load(config.MODEL_SAVE_PATH)
+        checkpoint = torch.load(config.MODEL_SAVE_PATH, weights_only=False)
         model.load_state_dict(checkpoint["model_state_dict"])
         print(
             f"✓ Loaded model from epoch {checkpoint['epoch']} (F1: {checkpoint['best_f1']:.4f})"
@@ -714,7 +755,7 @@ def train(config: Config):
     print(f"\n{'='*70}")
     print("FINAL TEST EVALUATION")
     print(f"{'='*70}")
-    
+
     try:
         test_metrics = evaluate(model, test_loader, config, "test")
         training_history["test"] = test_metrics
