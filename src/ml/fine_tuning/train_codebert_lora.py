@@ -226,8 +226,23 @@ class CodeBERTForVulnerabilityDetection(nn.Module):
         for param in self.roberta.parameters():
             param.requires_grad = False
 
-    def forward(self, input_ids, attention_mask):
-        outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
+    def forward(self, input_ids=None, attention_mask=None, **kwargs):
+        """
+        Forward pass with **kwargs to handle PEFT library arguments
+
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Attention mask
+            **kwargs: Additional arguments from PEFT (e.g., inputs_embeds, output_hidden_states)
+        """
+        # PEFT may pass inputs_embeds instead of input_ids, handle both
+        if input_ids is None and "inputs_embeds" in kwargs:
+            outputs = self.roberta(
+                inputs_embeds=kwargs["inputs_embeds"], attention_mask=attention_mask
+            )
+        else:
+            outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
+
         pooled_output = outputs.pooler_output  # [CLS] token representation
         logits = self.classifier(pooled_output)
         return logits
@@ -435,7 +450,7 @@ def train_epoch(
         # Forward pass with mixed precision (BF16 or FP16)
         if config.USE_MIXED_PRECISION:
             with autocast(enabled=True, dtype=config.PRECISION_DTYPE):
-                logits = model(input_ids, attention_mask)
+                logits = model(input_ids=input_ids, attention_mask=attention_mask)
                 loss = criterion(logits, labels)
                 loss = loss / accumulation_steps  # Scale loss for accumulation
 
@@ -451,7 +466,7 @@ def train_epoch(
                 scheduler.step()
                 optimizer.zero_grad()
         else:
-            logits = model(input_ids, attention_mask)
+            logits = model(input_ids=input_ids, attention_mask=attention_mask)
             loss = criterion(logits, labels)
             loss = loss / accumulation_steps
             loss.backward()
@@ -503,10 +518,10 @@ def evaluate(model, data_loader, config: Config, split_name: str):
             # Forward pass with mixed precision (BF16 or FP16)
             if config.USE_MIXED_PRECISION:
                 with autocast(enabled=True, dtype=config.PRECISION_DTYPE):
-                    logits = model(input_ids, attention_mask)
+                    logits = model(input_ids=input_ids, attention_mask=attention_mask)
                     loss = criterion(logits, labels)
             else:
-                logits = model(input_ids, attention_mask)
+                logits = model(input_ids=input_ids, attention_mask=attention_mask)
                 loss = criterion(logits, labels)
 
             # Track metrics
