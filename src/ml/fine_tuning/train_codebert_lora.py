@@ -40,6 +40,7 @@ warnings.filterwarnings("ignore")
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 
+
 # Detect BFloat16 support
 def check_bf16_support():
     """Check if current GPU supports BFloat16"""
@@ -53,6 +54,7 @@ def check_bf16_support():
         return major >= 8
     except Exception:
         return False
+
 
 BF16_SUPPORTED = check_bf16_support()
 
@@ -119,8 +121,39 @@ class CodeBERTForVulnerabilityDetection(nn.Module):
 
     def __init__(self, model_name: str, num_labels: int = 2):
         super().__init__()
-        self.config = RobertaConfig.from_pretrained(model_name)
-        self.roberta = RobertaModel.from_pretrained(model_name, config=self.config)
+
+        # Load model with error handling for Kaggle environment
+        print(f"Loading model: {model_name}")
+        try:
+            # Try loading with trust_remote_code and force_download
+            self.config = RobertaConfig.from_pretrained(
+                model_name, trust_remote_code=True
+            )
+            self.roberta = RobertaModel.from_pretrained(
+                model_name,
+                config=self.config,
+                trust_remote_code=True,
+                resume_download=True,
+            )
+        except Exception as e:
+            print(f"⚠️ First attempt failed: {e}")
+            print("Trying alternative loading method...")
+            # Fallback: try without trust_remote_code
+            try:
+                self.config = RobertaConfig.from_pretrained(model_name)
+                self.roberta = RobertaModel.from_pretrained(
+                    model_name,
+                    config=self.config,
+                    resume_download=True,
+                    local_files_only=False,
+                )
+            except Exception as e2:
+                print(f"⚠️ Second attempt failed: {e2}")
+                raise RuntimeError(
+                    f"Failed to load model '{model_name}'. "
+                    "Please ensure you have internet connection on Kaggle. "
+                    "Go to Settings → Internet → Enable"
+                ) from e2
 
         # Classification head (this is what we'll train)
         self.classifier = nn.Sequential(
@@ -444,7 +477,9 @@ def train(config: Config):
 
     # Display precision info
     if config.USE_MIXED_PRECISION:
-        precision_name = "BFloat16" if config.PRECISION_DTYPE == torch.bfloat16 else "Float16"
+        precision_name = (
+            "BFloat16" if config.PRECISION_DTYPE == torch.bfloat16 else "Float16"
+        )
         print(f"Precision: {precision_name} (Mixed Precision)")
     else:
         print(f"Precision: Float32")
