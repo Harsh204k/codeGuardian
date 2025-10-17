@@ -20,6 +20,37 @@ Author: CodeGuardian Team
 Date: October 2025
 """
 
+# Fix httpx compatibility issue on Kaggle
+import sys
+import subprocess
+
+
+def fix_kaggle_dependencies():
+    """Fix transformers/httpx compatibility on Kaggle"""
+    try:
+        print("🔧 Checking dependencies...")
+        subprocess.check_call(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-q",
+                "--upgrade",
+                "httpx>=0.24.0",
+                "huggingface-hub>=0.19.0",
+                "transformers>=4.36.0",
+            ]
+        )
+        print("✓ Dependencies updated successfully")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not update dependencies: {e}")
+        print("Continuing with existing versions...")
+
+
+# Run fix before imports
+fix_kaggle_dependencies()
+
 import os
 import gc
 import json
@@ -124,36 +155,67 @@ class CodeBERTForVulnerabilityDetection(nn.Module):
 
         # Load model with error handling for Kaggle environment
         print(f"Loading model: {model_name}")
+
+        # Strategy 1: Try loading with updated transformers
         try:
-            # Try loading with trust_remote_code and force_download
-            self.config = RobertaConfig.from_pretrained(
-                model_name, trust_remote_code=True
-            )
-            self.roberta = RobertaModel.from_pretrained(
+            from transformers import AutoModel, AutoConfig
+
+            self.config = AutoConfig.from_pretrained(model_name, force_download=False)
+            self.roberta = AutoModel.from_pretrained(
                 model_name,
                 config=self.config,
-                trust_remote_code=True,
-                resume_download=True,
+                force_download=False,
             )
+            print("✓ Loaded successfully using AutoModel")
         except Exception as e:
-            print(f"⚠️ First attempt failed: {e}")
-            print("Trying alternative loading method...")
-            # Fallback: try without trust_remote_code
+            print(f"⚠️ AutoModel attempt failed: {str(e)[:100]}...")
+
+            # Strategy 2: Try with explicit cache directory
             try:
-                self.config = RobertaConfig.from_pretrained(model_name)
+                cache_dir = "/kaggle/working/hf_cache"
+                os.makedirs(cache_dir, exist_ok=True)
+                self.config = RobertaConfig.from_pretrained(
+                    model_name,
+                    cache_dir=cache_dir,
+                    force_download=False,
+                )
                 self.roberta = RobertaModel.from_pretrained(
                     model_name,
                     config=self.config,
-                    resume_download=True,
-                    local_files_only=False,
+                    cache_dir=cache_dir,
+                    force_download=False,
                 )
+                print("✓ Loaded successfully using cache directory")
             except Exception as e2:
-                print(f"⚠️ Second attempt failed: {e2}")
-                raise RuntimeError(
-                    f"Failed to load model '{model_name}'. "
-                    "Please ensure you have internet connection on Kaggle. "
-                    "Go to Settings → Internet → Enable"
-                ) from e2
+                print(f"⚠️ Cache directory attempt failed: {str(e2)[:100]}...")
+
+                # Strategy 3: Try legacy loading without any special flags
+                try:
+                    import transformers
+
+                    print(f"Transformers version: {transformers.__version__}")
+                    self.config = RobertaConfig.from_pretrained(model_name)
+                    self.roberta = RobertaModel.from_pretrained(model_name)
+                    print("✓ Loaded successfully using legacy method")
+                except Exception as e3:
+                    print(f"⚠️ Legacy method failed: {str(e3)[:100]}...")
+                    print("\n" + "=" * 70)
+                    print("❌ ALL LOADING STRATEGIES FAILED")
+                    print("=" * 70)
+                    print("\nPossible solutions:")
+                    print("1. Ensure internet is enabled: Settings → Internet → On")
+                    print("2. Try using a different accelerator (P100, TPU)")
+                    print("3. Pre-download model to Kaggle dataset:")
+                    print(
+                        "   - Download from https://huggingface.co/microsoft/codebert-base"
+                    )
+                    print("   - Upload as Kaggle dataset")
+                    print("   - Change model_name to dataset path")
+                    print("=" * 70)
+                    raise RuntimeError(
+                        f"Failed to load '{model_name}' after trying 3 strategies. "
+                        f"Last error: {str(e3)}"
+                    ) from e3
 
         # Classification head (this is what we'll train)
         self.classifier = nn.Sequential(
