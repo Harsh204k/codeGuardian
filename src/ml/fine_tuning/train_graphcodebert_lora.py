@@ -34,7 +34,7 @@ import subprocess
 def fix_kaggle_dependencies():
     """Fix transformers/httpx compatibility on Kaggle"""
     try:
-        print("🔧 Checking dependencies...")
+        print("[INFO] Checking dependencies...")
         subprocess.check_call(
             [
                 sys.executable,
@@ -48,9 +48,9 @@ def fix_kaggle_dependencies():
                 "transformers>=4.36.0",
             ]
         )
-        print("✓ Dependencies updated successfully")
+        print("[OK] Dependencies updated successfully")
     except Exception as e:
-        print(f"⚠️ Warning: Could not update dependencies: {e}")
+        print(f"[WARN] Warning: Could not update dependencies: {e}")
         print("Continuing with existing versions...")
 
 
@@ -176,9 +176,9 @@ class GraphCodeBERTForVulnerabilityDetection(nn.Module):
                 config=self.config,
                 force_download=False,
             )
-            print("✓ Loaded successfully using AutoModel")
+            print("[OK] Loaded successfully using AutoModel")
         except Exception as e:
-            print(f"⚠️ AutoModel attempt failed: {str(e)[:100]}...")
+            print(f"[WARN] AutoModel attempt failed: {str(e)[:100]}...")
 
             # Strategy 2: Try with explicit cache directory
             try:
@@ -195,9 +195,9 @@ class GraphCodeBERTForVulnerabilityDetection(nn.Module):
                     cache_dir=cache_dir,
                     force_download=False,
                 )
-                print("✓ Loaded successfully using cache directory")
+                print("[OK] Loaded successfully using cache directory")
             except Exception as e2:
-                print(f"⚠️ Cache directory attempt failed: {str(e2)[:100]}...")
+                print(f"[WARN] Cache directory attempt failed: {str(e2)[:100]}...")
 
                 # Strategy 3: Try legacy loading without any special flags
                 try:
@@ -206,9 +206,9 @@ class GraphCodeBERTForVulnerabilityDetection(nn.Module):
                     print(f"Transformers version: {transformers.__version__}")
                     self.config = RobertaConfig.from_pretrained(model_name)
                     self.roberta = RobertaModel.from_pretrained(model_name)
-                    print("✓ Loaded successfully using legacy method")
+                    print("[OK] Loaded successfully using legacy method")
                 except Exception as e3:
-                    print(f"⚠️ Legacy method failed: {str(e3)[:100]}...")
+                    print(f"[WARN] Legacy method failed: {str(e3)[:100]}...")
                     print("\n" + "=" * 70)
                     print("❌ ALL LOADING STRATEGIES FAILED")
                     print("=" * 70)
@@ -277,7 +277,7 @@ def load_tokenized_dataset(file_path: str, config: Config):
     attention_mask = data["attention_mask"]
     labels = data["labels"]
 
-    print(f"✓ Loaded {len(input_ids)} samples")
+    print(f"[OK] Loaded {len(input_ids)} samples")
     print(f"  - Input shape: {input_ids.shape}")
     print(f"  - Labels distribution: {torch.bincount(labels)}")
 
@@ -334,7 +334,7 @@ def create_dataloaders(config: Config):
         prefetch_factor=2,
     )
 
-    print(f"\n✓ DataLoaders created successfully")
+    print(f"\n[OK] DataLoaders created successfully")
     print(f"  - Train batches: {len(train_loader)}")
     print(f"  - Val batches: {len(val_loader)}")
     print(f"  - Test batches: {len(test_loader)}")
@@ -358,7 +358,7 @@ def initialize_model(config: Config):
         model_name=config.MODEL_NAME, num_labels=config.NUM_LABELS
     )
 
-    print(f"✓ Base model loaded: {config.MODEL_NAME}")
+    print(f"[OK] Base model loaded: {config.MODEL_NAME}")
 
     # Count parameters before LoRA
     total_params = sum(p.numel() for p in model.parameters())
@@ -366,7 +366,7 @@ def initialize_model(config: Config):
         p.numel() for p in model.parameters() if p.requires_grad
     )
 
-    print(f"\n📊 Parameters before LoRA:")
+    print(f"\n[METRICS] Parameters before LoRA:")
     print(f"  - Total: {total_params:,}")
     print(
         f"  - Trainable: {trainable_params_before:,} ({100*trainable_params_before/total_params:.2f}%)"
@@ -398,12 +398,12 @@ def initialize_model(config: Config):
         p.numel() for p in model.parameters() if p.requires_grad
     )
 
-    print(f"\n✓ LoRA applied to final classification layer")
+    print(f"\n[OK] LoRA applied to final classification layer")
     print(f"  - LoRA rank (r): {config.LORA_R}")
     print(f"  - LoRA alpha: {config.LORA_ALPHA}")
     print(f"  - LoRA dropout: {config.LORA_DROPOUT}")
 
-    print(f"\n📊 Parameters after LoRA:")
+    print(f"\n[METRICS] Parameters after LoRA:")
     print(
         f"  - Trainable: {trainable_params_after:,} ({100*trainable_params_after/total_params:.2f}%)"
     )
@@ -416,11 +416,11 @@ def initialize_model(config: Config):
     # The training still benefits from other optimizations (mixed precision, gradient accumulation, etc.)
     # try:
     #     model = torch.compile(model)
-    #     print("\n✓ Model compiled with torch.compile()")
+    #     print("\n[OK] Model compiled with torch.compile()")
     # except Exception as e:
     #     print(f"\n⚠ torch.compile() not available: {e}")
 
-    print("\n⚠️ torch.compile() disabled for PEFT compatibility")
+    print("\n[WARN] torch.compile() disabled for PEFT compatibility")
     print(
         "   Training will still be optimized with mixed precision & gradient accumulation"
     )
@@ -588,7 +588,7 @@ def train(config: Config):
     print(f"Epochs: {config.EPOCHS}")
 
     if torch.cuda.is_available():
-        print(f"\n🎮 GPU Info:")
+        print(f"\n[GPU] GPU Info:")
         print(f"  - Name: {torch.cuda.get_device_name(0)}")
         print(
             f"  - Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
@@ -660,15 +660,15 @@ def train(config: Config):
         training_history = checkpoint.get(
             "training_history", {"train": [], "val": [], "test": None}
         )
-        print(f"✓ Resumed from epoch {start_epoch - 1}")
-        print(f"✓ Best F1 so far: {best_f1:.4f}")
-        print(f"✓ Continuing from epoch {start_epoch}")
+        print(f"[OK] Resumed from epoch {start_epoch - 1}")
+        print(f"[OK] Best F1 so far: {best_f1:.4f}")
+        print(f"[OK] Continuing from epoch {start_epoch}")
     elif resume_checkpoint:
         print("\n" + "=" * 70)
         print("TRAINING ALREADY COMPLETE")
         print("=" * 70)
-        print(f"✓ All {config.EPOCHS} epochs already trained")
-        print(f"✓ Loading final model for evaluation")
+        print(f"[OK] All {config.EPOCHS} epochs already trained")
+        print(f"[OK] Loading final model for evaluation")
         checkpoint = torch.load(config.MODEL_SAVE_PATH, weights_only=False)
         model.load_state_dict(checkpoint["model_state_dict"])
         best_f1 = checkpoint.get("best_f1", 0.0)
@@ -696,7 +696,7 @@ def train(config: Config):
         epoch_time = time.time() - epoch_start
         epoch_times.append(epoch_time)
 
-        print(f"\n📊 Train Metrics:")
+        print(f"\n[METRICS] Train Metrics:")
         print(f"  - Loss: {train_metrics['loss']:.4f}")
         print(f"  - Accuracy: {train_metrics['accuracy']:.4f}")
         print(f"  - F1-Score: {train_metrics['f1']:.4f}")
@@ -708,14 +708,14 @@ def train(config: Config):
             val_metrics = evaluate(model, val_loader, config, "validation")
             training_history["val"].append(val_metrics)
 
-            print(f"\n📊 Validation Metrics:")
+            print(f"\n[METRICS] Validation Metrics:")
             print(f"  - Loss: {val_metrics['loss']:.4f}")
             print(f"  - Accuracy: {val_metrics['accuracy']:.4f}")
             print(f"  - F1-Score: {val_metrics['f1']:.4f}")
             print(f"  - Precision: {val_metrics['precision']:.4f}")
             print(f"  - Recall: {val_metrics['recall']:.4f}")
         except Exception as e:
-            print(f"\n⚠️ Validation failed with error: {str(e)[:200]}")
+            print(f"\n[WARN] Validation failed with error: {str(e)[:200]}")
             print("   Using training metrics as proxy for validation")
             val_metrics = train_metrics.copy()
             training_history["val"].append(val_metrics)
@@ -733,7 +733,7 @@ def train(config: Config):
                 },
                 config.MODEL_SAVE_PATH,
             )
-            print(f"\n✓ Best model saved! (F1: {best_f1:.4f})")
+            print(f"\n[OK] Best model saved! (F1: {best_f1:.4f})")
 
         # Save epoch checkpoint for resume capability
         epoch_checkpoint_path = os.path.join(
@@ -751,7 +751,7 @@ def train(config: Config):
             },
             epoch_checkpoint_path,
         )
-        print(f"✓ Epoch {epoch} checkpoint saved: {epoch_checkpoint_path}")
+        print(f"[OK] Epoch {epoch} checkpoint saved: {epoch_checkpoint_path}")
 
     # Load best model for final evaluation
     if config.SAVE_BEST_MODEL:
@@ -761,7 +761,7 @@ def train(config: Config):
         checkpoint = torch.load(config.MODEL_SAVE_PATH, weights_only=False)
         model.load_state_dict(checkpoint["model_state_dict"])
         print(
-            f"✓ Loaded model from epoch {checkpoint['epoch']} (F1: {checkpoint['best_f1']:.4f})"
+            f"[OK] Loaded model from epoch {checkpoint['epoch']} (F1: {checkpoint['best_f1']:.4f})"
         )
 
     # Final test evaluation
@@ -773,14 +773,14 @@ def train(config: Config):
         test_metrics = evaluate(model, test_loader, config, "test")
         training_history["test"] = test_metrics
 
-        print(f"\n📊 Test Metrics:")
+        print(f"\n[METRICS] Test Metrics:")
         print(f"  - Loss: {test_metrics['loss']:.4f}")
         print(f"  - Accuracy: {test_metrics['accuracy']:.4f}")
         print(f"  - F1-Score: {test_metrics['f1']:.4f}")
         print(f"  - Precision: {test_metrics['precision']:.4f}")
         print(f"  - Recall: {test_metrics['recall']:.4f}")
     except Exception as e:
-        print(f"\n⚠️ Test evaluation failed with error: {str(e)[:200]}")
+        print(f"\n[WARN] Test evaluation failed with error: {str(e)[:200]}")
         print("   Using best validation metrics as proxy")
         test_metrics = training_history["val"][-1].copy()
         training_history["test"] = test_metrics
@@ -788,7 +788,7 @@ def train(config: Config):
     # Save metrics
     with open(config.METRICS_SAVE_PATH, "w") as f:
         json.dump(training_history, f, indent=2)
-    print(f"\n✓ Metrics saved to: {config.METRICS_SAVE_PATH}")
+    print(f"\n[OK] Metrics saved to: {config.METRICS_SAVE_PATH}")
 
     # Cleanup
     print(f"\n{'='*70}")
@@ -800,15 +800,15 @@ def train(config: Config):
         del scaler
     torch.cuda.empty_cache()
     gc.collect()
-    print("✓ GPU memory cleaned")
+    print("[OK] GPU memory cleaned")
 
     print(f"\n{'='*70}")
     print("TRAINING COMPLETE!")
     print(f"{'='*70}")
-    print(f"✓ Best Validation F1: {best_f1:.4f}")
-    print(f"✓ Test F1: {test_metrics['f1']:.4f}")
-    print(f"✓ Model saved: {config.MODEL_SAVE_PATH}")
-    print(f"✓ Metrics saved: {config.METRICS_SAVE_PATH}")
+    print(f"[OK] Best Validation F1: {best_f1:.4f}")
+    print(f"[OK] Test F1: {test_metrics['f1']:.4f}")
+    print(f"[OK] Model saved: {config.MODEL_SAVE_PATH}")
+    print(f"[OK] Metrics saved: {config.METRICS_SAVE_PATH}")
 
     # Training summary
     total_time = time.time() - start_time
@@ -817,19 +817,19 @@ def train(config: Config):
     print(f"\n{'='*70}")
     print("TRAINING SUMMARY")
     print(f"{'='*70}")
-    print(f"⏱  Total Runtime: {total_time/60:.2f} minutes ({total_time:.1f} seconds)")
+    print(f"[TIME]  Total Runtime: {total_time/60:.2f} minutes ({total_time:.1f} seconds)")
     print(
-        f"⏱  Avg Time per Epoch: {avg_epoch_time/60:.2f} minutes ({avg_epoch_time:.1f} seconds)"
+        f"[TIME]  Avg Time per Epoch: {avg_epoch_time/60:.2f} minutes ({avg_epoch_time:.1f} seconds)"
     )
 
     if torch.cuda.is_available():
         memory_allocated = torch.cuda.memory_allocated(0) / 1e9
         memory_reserved = torch.cuda.memory_reserved(0) / 1e9
-        print(f"💾 GPU Memory:")
+        print(f"[MEMORY] GPU Memory:")
         print(f"  - Allocated: {memory_allocated:.2f} GB")
         print(f"  - Reserved: {memory_reserved:.2f} GB")
 
-    print(f"\n📊 Final Performance:")
+    print(f"\n[METRICS] Final Performance:")
     print(f"  - Best Val F1: {best_f1:.4f}")
     print(f"  - Test Accuracy: {test_metrics['accuracy']:.4f}")
     print(f"  - Test F1: {test_metrics['f1']:.4f}")
