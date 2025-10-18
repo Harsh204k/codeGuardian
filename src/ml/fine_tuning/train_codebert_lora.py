@@ -1,22 +1,25 @@
 # type: ignore
 
 """
-Kaggle-Ready CodeBERT Fine-Tuning Script with LoRA (Optimized)
-===============================================================
+Enhanced CodeBERT Fine-Tuning with LoRA (r=16) for IIT Delhi Hackathon Stage I
+===============================================================================
 
-This script fine-tunes ONLY the final classification layer of CodeBERT for
-code vulnerability detection using LoRA/PEFT on Kaggle's free GPU (T4).
+This script fine-tunes CodeBERT with enhanced LoRA configuration for maximum
+performance on code vulnerability detection. Optimized for Kaggle T4 and A100.
 
-Optimizations:
-- BF16 mixed precision for better numerical stability
-- torch.compile for faster execution
-- Gradient accumulation for effective larger batch size
-- Linear warmup scheduler
-- Persistent workers and prefetch in DataLoader
-- Expanded LoRA targets (classifier + last encoder layer)
-- TF32 and cuDNN benchmarking enabled
+Key Enhancements for Stage I:
+- LoRA r=16, α=32, dropout=0.1 (increased from r=8)
+- Fine-tune last encoder block + final classification layer
+- Early stopping based on validation F1
+- Mixed precision (BF16 on A100, FP16 on T4)
+- Confidence calibration sweep
+- Explainability-ready outputs
 
-Author: CodeGuardian Team
+Hardware Support:
+- Kaggle T4: FP16 mixed precision
+- Supercomputer A100: BF16 mixed precision
+
+Author: CodeGuardian Team - IIT Delhi Hackathon
 Date: October 2025
 """
 
@@ -95,46 +98,58 @@ BF16_SUPPORTED = check_bf16_support()
 
 
 class Config:
-    """Configuration for CodeBERT fine-tuning"""
+    """Enhanced configuration for CodeBERT fine-tuning - Stage I optimized."""
 
     # Model settings
     MODEL_NAME = "microsoft/codebert-base"
     MODEL_CHOICE = "codebert"
     NUM_LABELS = 2
 
-    # Kaggle paths
-    DATA_PATH = (
-        "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/tokenized/codebert"
-    )
-    TRAIN_FILE = "train_tokenized_codebert.pt"
-    VAL_FILE = "val_tokenized_codebert.pt"
-    TEST_FILE = "test_tokenized_codebert.pt"
+    # Enhanced LoRA configuration for Stage I
+    LORA_R = 16  # Increased from 8
+    LORA_ALPHA = 32  # Increased from 16
+    LORA_DROPOUT = 0.1
+    ENABLE_LAYER_NORM_TUNING = True  # Enable for better performance
 
-    # Output paths
-    CHECKPOINT_DIR = "/kaggle/working/fine-tuning"
-    MODEL_SAVE_PATH = f"{CHECKPOINT_DIR}/codebert_final_layer.pt"
-    METRICS_SAVE_PATH = f"{CHECKPOINT_DIR}/codebert_eval_metrics.json"
-
-    # Training hyperparameters
+    # Training hyperparameters - Stage I optimized
     EPOCHS = 3
     TRAIN_BATCH_SIZE = 64
     EVAL_BATCH_SIZE = 128
-    LEARNING_RATE = 2e-3
+    LEARNING_RATE = 2e-4  # Reduced from 2e-3 for stability
     WEIGHT_DECAY = 0.01
     MAX_GRAD_NORM = 1.0
     WARMUP_STEPS = 100
     GRADIENT_ACCUMULATION_STEPS = 2
 
-    # LoRA configuration (classifier + last encoder layer)
-    LORA_R = 8
-    LORA_ALPHA = 16
-    LORA_DROPOUT = 0.1
-    ENABLE_LAYER_NORM_TUNING = False
+    # Early stopping configuration
+    EARLY_STOPPING_PATIENCE = 3
+    EARLY_STOPPING_MIN_DELTA = 0.001
+
+    # Paths - Auto-detect environment
+    if os.path.exists("/kaggle/input"):
+        # Kaggle environment
+        DATA_PATH = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/tokenized/codebert"
+        CHECKPOINT_DIR = "/kaggle/working/ml/fine_tuning/codebert"
+        METRICS_DIR = "/kaggle/working/ml/fine_tuning/codebert"
+    else:
+        # Local/HPC environment
+        DATA_PATH = "datasets/tokenized/codebert"
+        CHECKPOINT_DIR = "src/ml/fine_tuning/codebert"
+        METRICS_DIR = "src/ml/fine_tuning/codebert"
+
+    TRAIN_FILE = "train_tokenized_codebert.pt"
+    VAL_FILE = "val_tokenized_codebert.pt"
+    TEST_FILE = "test_tokenized_codebert.pt"
+
+    # Output files
+    MODEL_SAVE_PATH = f"{CHECKPOINT_DIR}/codebert_final.pt"
+    BEST_MODEL_PATH = f"{CHECKPOINT_DIR}/codebert_best.pt"
+    METRICS_SAVE_PATH = f"{METRICS_DIR}/codebert_metrics.json"
+    TRAINING_LOG = f"{METRICS_DIR}/codebert_training.log"
 
     # Device and precision
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    USE_MIXED_PRECISION = True  # Enable mixed precision training
-    # Auto-detect precision: BF16 if supported (Ampere+), else FP16
+    USE_MIXED_PRECISION = True
     PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16
 
     # Monitoring
