@@ -1,5 +1,5 @@
+# -*- coding: utf-8 -*-
 # type: ignore
-
 """
 Kaggle-Ready GraphCodeBERT Fine-Tuning Script with LoRA (Optimized)
 ====================================================================
@@ -117,6 +117,12 @@ class Config:
     CHECKPOINT_DIR = "/kaggle/working/fine-tuning"
     MODEL_SAVE_PATH = f"{CHECKPOINT_DIR}/graphcodebert_final_layer.pt"
     METRICS_SAVE_PATH = "/kaggle/working/graphcodebert_eval_metrics.json"
+
+    # HPC paths (uncomment for HPC, comment Kaggle paths above)
+    # DATA_PATH = "/home/23bce078/codeGuardian/datasets/tokenized/graphcodebert"
+    # CHECKPOINT_DIR = "/home/23bce078/codeGuardian/outputs/fine-tuning"
+    # MODEL_SAVE_PATH = f"{CHECKPOINT_DIR}/graphcodebert_final_layer.pt"
+    # METRICS_SAVE_PATH = "/home/23bce078/codeGuardian/outputs/graphcodebert_eval_metrics.json"
 
     # Training hyperparameters
     EPOCHS = 3
