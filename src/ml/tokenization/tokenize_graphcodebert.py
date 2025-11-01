@@ -602,8 +602,8 @@ def tokenize_dataset_batch(
     all_code = df["code"].astype(str).tolist()
     all_labels = df["is_vulnerable"].astype(int).tolist()
 
-    # CHUNKED BATCH TOKENIZATION - process in chunks to avoid OOM
-    chunk_size = 10000  # Process 10k samples at a time
+    # CHUNKED BATCH TOKENIZATION - process in smaller chunks to avoid OOM
+    chunk_size = 5000  # Reduced from 10000 for GraphCodeBERT memory efficiency
     num_chunks = (len(all_code) + chunk_size - 1) // chunk_size
 
     logger.info(f"⚡ Batch tokenizing in {num_chunks} chunks of {chunk_size} samples...")
@@ -630,6 +630,12 @@ def tokenize_dataset_batch(
             all_input_ids.append(encoded["input_ids"])
             all_attention_masks.append(encoded["attention_mask"])
 
+            # Memory cleanup after each chunk
+            import gc
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+
         # Concatenate all chunks
         logger.info(f"🔗 Concatenating {len(all_input_ids)} chunks...")
         tokenized_data = {
@@ -638,6 +644,13 @@ def tokenize_dataset_batch(
             "labels": torch.tensor(all_labels, dtype=torch.long),
             "features": torch.from_numpy(features).float(),
         }
+
+        # Clear intermediate lists to free memory
+        del all_input_ids, all_attention_masks
+        import gc
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
 
         # Log statistics
         logger.info(f"✅ {split_name} tokenization complete:")
@@ -991,7 +1004,7 @@ def main():
             logger.info(f"   Sample features: {feature_names[:5]}")
 
         # ====================================================================
-        # STEP 6: Tokenize and Persist All Splits
+        # STEP 6: Tokenize and Persist All Splits (Sequential processing for memory efficiency)
         # ====================================================================
         logger.info("\n[STEP 6/6] Tokenizing and persisting all splits...")
 
@@ -1002,6 +1015,13 @@ def main():
         )
         logger.info(f"✅ Train tokenization & persist complete")
 
+        # Memory cleanup before next split
+        import gc
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        del train_df, train_features, train_tokenized
+
         # Process val (use fitted scaler)
         logger.info("\n--- Processing VAL split ---")
         val_tokenized, _ = process_and_persist_split(
@@ -1009,12 +1029,26 @@ def main():
         )
         logger.info(f"✅ Validation tokenization & persist complete")
 
+        # Memory cleanup before next split
+        import gc
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        del val_df, val_features, val_tokenized
+
         # Process test (use fitted scaler)
         logger.info("\n--- Processing TEST split ---")
         test_tokenized, _ = process_and_persist_split(
             "test", test_df, test_features, tokenizer, config, scaler=scaler
         )
         logger.info(f"✅ Test tokenization & persist complete")
+
+        # Final memory cleanup
+        import gc
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        del test_df, test_features, test_tokenized, scaler
 
         # ====================================================================
         # STEP 7: Final Verification
