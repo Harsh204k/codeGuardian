@@ -657,62 +657,6 @@ def tokenize_dataset_batch(
         logger.error(f"❌ PENALTY: Tokenization failed for {split_name}: {e}")
         raise
 
-    all_input_ids = []
-    all_attention_masks = []
-
-    try:
-        padding_strategy = "max_length"  # Always use max_length for consistent shapes
-
-        for i in tqdm(range(0, len(all_code), chunk_size), desc=f"Tokenizing {split_name}"):
-            chunk_code = all_code[i:i + chunk_size]
-
-            # Tokenize this chunk
-            encodings = tokenizer(
-                chunk_code,
-                max_length=config.max_seq_length,
-                padding=padding_strategy,
-                truncation=config.truncation,
-                return_attention_mask=config.return_attention_mask,
-                return_tensors="pt",  # Return PyTorch tensors
-            )
-
-            all_input_ids.append(encodings["input_ids"])
-            all_attention_masks.append(encodings["attention_mask"])
-
-        # Concatenate all chunks
-        logger.info(f"� Concatenating {len(all_input_ids)} chunks...")
-        tokenized_data = {
-            "input_ids": torch.cat(all_input_ids, dim=0),
-            "attention_mask": torch.cat(all_attention_masks, dim=0),
-            "labels": torch.tensor(all_labels, dtype=torch.long),
-        }
-
-        # Log statistics
-        error_count = len(failed_indices)
-        success_count = tokenized_data["input_ids"].shape[0]
-
-        logger.info(f"✅ {split_name} tokenization complete:")
-        logger.info(f"   Successful samples: {success_count}")
-        logger.info(f"   Failed samples: {error_count}")
-        logger.info(
-            f"   Success rate: {success_count / (success_count + error_count) * 100:.2f}%"
-        )
-        logger.info(f"   Input IDs shape: {tokenized_data['input_ids'].shape}")
-        logger.info(
-            f"   Attention mask shape: {tokenized_data['attention_mask'].shape}"
-        )
-        logger.info(f"   Labels shape: {tokenized_data['labels'].shape}")
-
-        # Memory usage info
-        input_ids_size_mb = tokenized_data["input_ids"].element_size() * tokenized_data["input_ids"].nelement() / (1024 * 1024)
-        logger.info(f"   Memory usage: ~{input_ids_size_mb * 3:.1f} MB (input_ids + attention_mask + labels)")
-
-        return tokenized_data
-
-    except Exception as e:
-        logger.error(f"❌ PENALTY: Tokenization failed for {split_name}: {e}")
-        raise
-
 
 # ============================================================================
 # VALIDATION
@@ -799,15 +743,6 @@ def validate_tokenized_data(
     logger.info(f"✅ {split_name} validation passed!")
     logger.info(f"   Input shape: {input_ids.shape}")
     logger.info(f"   Feature shape: {features.shape}")
-    logger.info(f"   Label distribution: {Counter(labels.tolist())}")
-        raise ValueError(f"Invalid dtype")
-
-    if labels.dtype != torch.long:
-        logger.error(f"❌ PENALTY: Invalid dtype for labels")
-        raise ValueError(f"Invalid dtype")
-
-    logger.info(f"✅ {split_name} validation passed!")
-    logger.info(f"   Shape: {input_ids.shape}")
     logger.info(f"   Label distribution: {Counter(labels.tolist())}")
 
 
@@ -1084,34 +1019,6 @@ def main():
         logger.error(f"Error: {type(e).__name__}: {e}")
         logger.error("\n💡 Troubleshooting:")
         logger.error("   1. Check input paths exist")
-        logger.error("   2. Verify JSONL format is valid")
-        logger.error("   3. Ensure sufficient memory")
-        logger.error("   4. Check log file for details")
-        raise
-        logger.info(f"   ✅ Reproducible (seed={config.random_seed})")
-        logger.info(f"   ✅ Train shuffling: {'ON' if config.shuffle_train else 'OFF'}")
-        logger.info(f"   ✅ Consolidated split processing pipeline")
-        logger.info("=" * 80)
-
-        return reward_score
-
-    except Exception as e:
-        logger.error("\n" + "=" * 80)
-        logger.error("❌ PIPELINE FAILED!")
-        logger.error("=" * 80)
-        logger.error(f"💔 PENALTY: {e}")
-        logger.error(f"📉 Final Score: {reward_score}/200 (FAILED)")
-
-        if error_tracker:
-            total_errors = error_tracker.get_error_count()
-            logger.error(f"📊 Errors encountered: {total_errors}")
-            logger.error(f"   Error log: {config.error_log}")
-
-        logger.error("=" * 80)
-        raise
-
-    finally:
-        # Cleanup
         logger.error("   2. Verify JSONL format is valid")
         logger.error("   3. Ensure sufficient memory")
         logger.error("   4. Check log file for details")
