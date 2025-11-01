@@ -928,7 +928,6 @@ def main():
         # STEP 3: Load Tokenizer
         # ====================================================================
         logger.info("\n[STEP 3/6] Loading tokenizer...")
-        import os
         # Disable chat template fetching to avoid 404 errors
         os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
