@@ -800,15 +800,6 @@ def validate_tokenized_data(
     logger.info(f"   Input shape: {input_ids.shape}")
     logger.info(f"   Feature shape: {features.shape}")
     logger.info(f"   Label distribution: {Counter(labels.tolist())}")
-        raise ValueError(f"Invalid dtype")
-
-    if labels.dtype != torch.long:
-        logger.error(f"❌ PENALTY: Invalid dtype for labels")
-        raise ValueError(f"Invalid dtype")
-
-    logger.info(f"✅ {split_name} validation passed!")
-    logger.info(f"   Shape: {input_ids.shape}")
-    logger.info(f"   Label distribution: {Counter(labels.tolist())}")
 
 
 # ============================================================================
@@ -1112,34 +1103,6 @@ def main():
         logger.error(f"Error: {type(e).__name__}: {e}")
         logger.error("\n💡 Troubleshooting:")
         logger.error("   1. Check input paths exist")
-        logger.error("   2. Verify JSONL format is valid")
-        logger.error("   3. Ensure sufficient memory")
-        logger.error("   4. Check log file for details")
-        raise
-        logger.info(f"   ✅ Reproducible (seed={config.random_seed})")
-        logger.info(f"   ✅ Train shuffling: {'ON' if config.shuffle_train else 'OFF'}")
-        logger.info(f"   ✅ Consolidated split processing pipeline")
-        logger.info("=" * 80)
-
-        return reward_score
-
-    except Exception as e:
-        logger.error("\n" + "=" * 80)
-        logger.error("❌ PIPELINE FAILED!")
-        logger.error("=" * 80)
-        logger.error(f"💔 PENALTY: {e}")
-        logger.error(f"📉 Final Score: {reward_score}/200 (FAILED)")
-
-        if error_tracker:
-            total_errors = error_tracker.get_error_count()
-            logger.error(f"📊 Errors encountered: {total_errors}")
-            logger.error(f"   Error log: {config.error_log}")
-
-        logger.error("=" * 80)
-        raise
-
-    finally:
-        # Cleanup
         logger.error("   2. Verify JSONL format is valid")
         logger.error("   3. Ensure sufficient memory")
         logger.error("   4. Check log file for details")
