@@ -3,7 +3,7 @@
 
 """
 GraphCodeBERT Tokenization Pipeline for Vulnerability Detection with Multimodal Features
-=========================================================================================
+====================================================================================
 Production-ready tokenization script with engineered numeric features support.
 
 Features:
@@ -602,8 +602,8 @@ def tokenize_dataset_batch(
     all_code = df["code"].astype(str).tolist()
     all_labels = df["is_vulnerable"].astype(int).tolist()
 
-    # CHUNKED BATCH TOKENIZATION - process in smaller chunks to avoid OOM
-    chunk_size = 5000  # Reduced from 10000 for GraphCodeBERT memory efficiency
+    # CHUNKED BATCH TOKENIZATION - process in chunks to avoid OOM
+    chunk_size = 10000  # Process 10k samples at a time
     num_chunks = (len(all_code) + chunk_size - 1) // chunk_size
 
     logger.info(f"⚡ Batch tokenizing in {num_chunks} chunks of {chunk_size} samples...")
@@ -630,12 +630,6 @@ def tokenize_dataset_batch(
             all_input_ids.append(encoded["input_ids"])
             all_attention_masks.append(encoded["attention_mask"])
 
-            # Memory cleanup after each chunk
-            import gc
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            gc.collect()
-
         # Concatenate all chunks
         logger.info(f"🔗 Concatenating {len(all_input_ids)} chunks...")
         tokenized_data = {
@@ -644,13 +638,6 @@ def tokenize_dataset_batch(
             "labels": torch.tensor(all_labels, dtype=torch.long),
             "features": torch.from_numpy(features).float(),
         }
-
-        # Clear intermediate lists to free memory
-        del all_input_ids, all_attention_masks
-        import gc
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
 
         # Log statistics
         logger.info(f"✅ {split_name} tokenization complete:")
@@ -913,7 +900,7 @@ def main():
     config = TokenizationConfig()
 
     logger.info("=" * 80)
-    logger.info("🚀 GraphCodeBERT Multimodal Tokenization Pipeline")
+    logger.info("🚀 graphcodebert Multimodal Tokenization Pipeline")
     logger.info("=" * 80)
     logger.info(f"📋 Configuration:")
     logger.info(f"   Model: {config.model_name}")
@@ -1004,7 +991,7 @@ def main():
             logger.info(f"   Sample features: {feature_names[:5]}")
 
         # ====================================================================
-        # STEP 6: Tokenize and Persist All Splits (Sequential processing for memory efficiency)
+        # STEP 6: Tokenize and Persist All Splits
         # ====================================================================
         logger.info("\n[STEP 6/6] Tokenizing and persisting all splits...")
 
@@ -1015,13 +1002,6 @@ def main():
         )
         logger.info(f"✅ Train tokenization & persist complete")
 
-        # Memory cleanup before next split
-        import gc
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
-        del train_df, train_features, train_tokenized
-
         # Process val (use fitted scaler)
         logger.info("\n--- Processing VAL split ---")
         val_tokenized, _ = process_and_persist_split(
@@ -1029,26 +1009,12 @@ def main():
         )
         logger.info(f"✅ Validation tokenization & persist complete")
 
-        # Memory cleanup before next split
-        import gc
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
-        del val_df, val_features, val_tokenized
-
         # Process test (use fitted scaler)
         logger.info("\n--- Processing TEST split ---")
         test_tokenized, _ = process_and_persist_split(
             "test", test_df, test_features, tokenizer, config, scaler=scaler
         )
         logger.info(f"✅ Test tokenization & persist complete")
-
-        # Final memory cleanup
-        import gc
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
-        del test_df, test_features, test_tokenized, scaler
 
         # ====================================================================
         # STEP 7: Final Verification
@@ -1066,7 +1032,7 @@ def main():
         logger.info(f"\n📁 Output Directory: {config.output_base}")
         logger.info(f"   ├── train_tokenized_graphcodebert.pt ({len(train_df)} samples)")
         logger.info(f"   ├── val_tokenized_graphcodebert.pt ({len(val_df)} samples)")
-        logger.info(f"   └── test_tokenized_graphcodebert.pt ({len(test_df)} samples)")
+        logger.info(f"   └── test_tokenized_graphgraphcodebert.pt ({len(test_df)} samples)")
         logger.info(f"\n📊 Output Structure (per .pt file):")
         logger.info(f"   ├── input_ids: {train_tokenized['input_ids'].shape}")
         logger.info(f"   ├── attention_mask: {train_tokenized['attention_mask'].shape}")
@@ -1097,4 +1063,3 @@ if __name__ == "__main__":
         pass
 
     main()
-
