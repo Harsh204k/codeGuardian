@@ -994,12 +994,14 @@ def train(config: Config) -> None:
     first_batch = next(iter(train_loader))
     use_features = "features" in first_batch
 
-    # Compute class weights for loss
-    train_labels = []
-    for batch in train_loader:
-        train_labels.extend(batch["labels"].tolist())
-    train_labels = torch.tensor(train_labels)
+    # Compute class weights efficiently from dataset (not loader)
+    logger.info("\n📊 Computing class weights...")
+    train_data = load_tokenized_dataset(
+        os.path.join(config.DATA_PATH, config.TRAIN_FILE), config, logger
+    )
+    train_labels = train_data["labels"]
     class_weights = compute_class_weights(train_labels, config.DEVICE)
+
     logger.info(f"\n📊 Class Distribution:")
     logger.info(f"  - Class 0 (Secure): {(train_labels == 0).sum().item()}")
     logger.info(f"  - Class 1 (Vulnerable): {(train_labels == 1).sum().item()}")
