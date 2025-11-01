@@ -657,62 +657,6 @@ def tokenize_dataset_batch(
         logger.error(f"❌ PENALTY: Tokenization failed for {split_name}: {e}")
         raise
 
-    all_input_ids = []
-    all_attention_masks = []
-
-    try:
-        padding_strategy = "max_length"  # Always use max_length for consistent shapes
-
-        for i in tqdm(range(0, len(all_code), chunk_size), desc=f"Tokenizing {split_name}"):
-            chunk_code = all_code[i:i + chunk_size]
-
-            # Tokenize this chunk
-            encodings = tokenizer(
-                chunk_code,
-                max_length=config.max_seq_length,
-                padding=padding_strategy,
-                truncation=config.truncation,
-                return_attention_mask=config.return_attention_mask,
-                return_tensors="pt",  # Return PyTorch tensors
-            )
-
-            all_input_ids.append(encodings["input_ids"])
-            all_attention_masks.append(encodings["attention_mask"])
-
-        # Concatenate all chunks
-        logger.info(f"� Concatenating {len(all_input_ids)} chunks...")
-        tokenized_data = {
-            "input_ids": torch.cat(all_input_ids, dim=0),
-            "attention_mask": torch.cat(all_attention_masks, dim=0),
-            "labels": torch.tensor(all_labels, dtype=torch.long),
-        }
-
-        # Log statistics
-        error_count = len(failed_indices)
-        success_count = tokenized_data["input_ids"].shape[0]
-
-        logger.info(f"✅ {split_name} tokenization complete:")
-        logger.info(f"   Successful samples: {success_count}")
-        logger.info(f"   Failed samples: {error_count}")
-        logger.info(
-            f"   Success rate: {success_count / (success_count + error_count) * 100:.2f}%"
-        )
-        logger.info(f"   Input IDs shape: {tokenized_data['input_ids'].shape}")
-        logger.info(
-            f"   Attention mask shape: {tokenized_data['attention_mask'].shape}"
-        )
-        logger.info(f"   Labels shape: {tokenized_data['labels'].shape}")
-
-        # Memory usage info
-        input_ids_size_mb = tokenized_data["input_ids"].element_size() * tokenized_data["input_ids"].nelement() / (1024 * 1024)
-        logger.info(f"   Memory usage: ~{input_ids_size_mb * 3:.1f} MB (input_ids + attention_mask + labels)")
-
-        return tokenized_data
-
-    except Exception as e:
-        logger.error(f"❌ PENALTY: Tokenization failed for {split_name}: {e}")
-        raise
-
 
 # ============================================================================
 # VALIDATION
