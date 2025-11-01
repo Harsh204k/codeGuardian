@@ -993,19 +993,36 @@ def main():
         # STEP 3: Load Tokenizer
         # ====================================================================
         logger.info("\n[STEP 3/6] Loading tokenizer...")
+        import os
+        # Disable chat template fetching to avoid 404 errors
+        os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
         try:
             tokenizer = AutoTokenizer.from_pretrained(
                 config.model_name,
                 trust_remote_code=False,
-                use_fast=True
+                use_fast=True,
+                chat_template=None
             )
         except Exception as e:
             logger.warning(f"⚠️ Fast tokenizer failed, trying basic tokenizer: {e}")
-            tokenizer = AutoTokenizer.from_pretrained(
-                config.model_name,
-                trust_remote_code=False,
-                use_fast=False
-            )
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    config.model_name,
+                    trust_remote_code=False,
+                    use_fast=False,
+                    chat_template=None
+                )
+            except Exception as e2:
+                logger.warning(f"⚠️ Basic tokenizer also failed, trying with local files only: {e2}")
+                # Last resort - try to load from local cache only
+                tokenizer = AutoTokenizer.from_pretrained(
+                    config.model_name,
+                    trust_remote_code=False,
+                    use_fast=False,
+                    chat_template=None,
+                    local_files_only=True
+                )
         logger.info(f"✅ Tokenizer loaded successfully")
 
         # ====================================================================
