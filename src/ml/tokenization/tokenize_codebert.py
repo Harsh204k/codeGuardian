@@ -2,26 +2,24 @@
 # type: ignore
 
 """
-CodeBERT Tokenization Pipeline for Vulnerability Detection
-===========================================================
-Production-ready tokenization script with multiprocessing and validation.
+CodeBERT Tokenization Pipeline for Vulnerability Detection with Multimodal Features
+====================================================================================
+Production-ready tokenization script with engineered numeric features support.
 
-Rewards:
-✅ Successful tokenization with proper shapes
-✅ Correct label conversion and balance check
-✅ Efficient batch processing with multiprocessing
-✅ Validation checks for data integrity
+Features:
+✅ JSONL input with code + ~107 numeric features
+✅ Tokenization with CodeBERT
+✅ Feature extraction and normalization
+✅ Multimodal output: input_ids + attention_mask + labels + features
 
-Penalties:
-❌ Tokenization errors or shape mismatches
-❌ Missing fields or incorrect labels
-❌ File I/O failures
-❌ Memory inefficiency
+Output:
+.pt files containing: input_ids, attention_mask, labels, features
 """
 
 import os
 import json
 import torch
+import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
@@ -35,6 +33,7 @@ from functools import partial
 import hashlib
 import random
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 
 # ============================================================================
 # CONFIGURATION
@@ -92,6 +91,14 @@ class TokenizationConfig:
     # Validation thresholds
     min_samples: int = 100
     max_label_imbalance: float = 0.95  # Max 95% of one class
+
+    # Feature engineering configuration
+    normalize_features: bool = True  # Apply StandardScaler to numeric features
+    feature_columns_exclude: List[str] = None  # Columns to exclude from features
+
+    def __post_init__(self):
+        if self.feature_columns_exclude is None:
+            self.feature_columns_exclude = ["code", "is_vulnerable", "id", "language", "dataset"]
 
 
 # ============================================================================
@@ -259,24 +266,24 @@ def set_seed(seed: int):
     logger.info(f"🎲 Random seed set to: {seed}")
 
 
-def load_jsonl(file_path: str) -> List[Dict]:
+def load_jsonl(file_path: str) -> pd.DataFrame:
     """
-    Load JSONL file with error handling.
+    Load JSONL file with pandas for efficient feature extraction.
 
-    Rewards: ✅ Successful loading
-    Penalties: ❌ File not found, ❌ JSON parse errors
+    Returns: DataFrame with all columns (code, is_vulnerable, features)
     """
     try:
-        data = []
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                try:
-                    data.append(json.loads(line.strip()))
-                except json.JSONDecodeError as e:
-                    logger.warning(f"⚠️ Skipping line {line_num} in {file_path}: {e}")
+        logger.info(f"📂 Loading JSONL file: {file_path}")
+        df = pd.read_json(file_path, lines=True)
 
-        logger.info(f"✅ Loaded {len(data)} samples from {file_path}")
-        return data
+        # Fill NaN values in numeric columns with 0.0
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        df[numeric_cols] = df[numeric_cols].fillna(0.0)
+
+        logger.info(f"✅ Loaded {len(df)} samples from {file_path}")
+        logger.info(f"   Columns: {len(df.columns)} total")
+
+        return df
 
     except FileNotFoundError:
         logger.error(f"❌ PENALTY: File not found: {file_path}")
@@ -287,73 +294,38 @@ def load_jsonl(file_path: str) -> List[Dict]:
 
 
 def validate_data(
-    data: List[Dict], split_name: str, config: TokenizationConfig
+    df: pd.DataFrame, split_name: str, config: TokenizationConfig
 ) -> None:
     """
-    Validate loaded data for required fields and label balance.
+    Validate loaded DataFrame for required fields and label balance.
 
-    Rewards: ✅ Valid data structure and balance
-    Penalties: ❌ Missing fields, ❌ Extreme imbalance, ❌ Too few samples
+    Args:
+        df: DataFrame with code, is_vulnerable, and feature columns
+        split_name: Name of the split (train/val/test)
+        config: Configuration object
     """
-    if len(data) < config.min_samples:
+    if len(df) < config.min_samples:
         logger.error(
-            f"❌ PENALTY: {split_name} has only {len(data)} samples (min: {config.min_samples})"
+            f"❌ PENALTY: {split_name} has only {len(df)} samples (min: {config.min_samples})"
         )
         raise ValueError(f"Insufficient samples in {split_name}")
 
     # Check required fields
     required_fields = ["code", "is_vulnerable"]
-    missing_fields = []
-
-    for idx, sample in enumerate(data[:10]):  # Check first 10 samples
-        for field in required_fields:
-            if field not in sample:
-                missing_fields.append((idx, field))
+    missing_fields = [f for f in required_fields if f not in df.columns]
 
     if missing_fields:
         logger.error(
-            f"❌ PENALTY: Missing fields in {split_name}: {missing_fields[:5]}"
+            f"❌ PENALTY: Missing fields in {split_name}: {missing_fields}"
         )
         raise ValueError(f"Missing required fields in {split_name}")
 
-    # Check and normalize label values
-    labels = []
-    label_issues = []
-
-    for idx, sample in enumerate(data):
-        label = sample.get("is_vulnerable")
-
-        # Normalize label to 0/1
-        if isinstance(label, bool):
-            normalized_label = int(label)
-        elif isinstance(label, (int, float)):
-            normalized_label = int(label)
-        else:
-            label_issues.append((idx, label))
-            continue
-
-        # Strict binary check
-        if config.strict_binary_labels and normalized_label not in [0, 1]:
-            label_issues.append((idx, label))
-            continue
-
-        labels.append(normalized_label)
-        # Update sample with normalized label
-        sample["is_vulnerable"] = normalized_label
-
-    if label_issues:
-        logger.warning(
-            f"⚠️ Found {len(label_issues)} label issues in {split_name} (first 5): {label_issues[:5]}"
-        )
-        if (
-            config.strict_binary_labels and len(label_issues) > len(data) * 0.01
-        ):  # More than 1%
-            logger.error(f"❌ PENALTY: Too many invalid labels in {split_name}")
-            raise ValueError(f"Invalid label values exceed threshold")
+    # Normalize labels to 0/1
+    df["is_vulnerable"] = df["is_vulnerable"].astype(int)
 
     # Check label balance
-    label_counts = Counter(labels)
-    total = len(labels)
+    label_counts = df["is_vulnerable"].value_counts().to_dict()
+    total = len(df)
 
     if total == 0:
         logger.error(f"❌ PENALTY: No valid labels in {split_name}")
@@ -368,14 +340,79 @@ def validate_data(
         f"   Non-vulnerable (0): {label_counts.get(0, 0)} ({non_vulnerable_ratio:.2%})"
     )
 
-    if config.support_multiclass:
-        unique_labels = list(label_counts.keys())
-        logger.info(f"   Unique labels (multiclass): {unique_labels}")
-
     if max(vulnerable_ratio, non_vulnerable_ratio) > config.max_label_imbalance:
         logger.warning(f"⚠️ WARNING: Extreme label imbalance in {split_name}")
     else:
         logger.info(f"✅ Label balance acceptable in {split_name}")
+
+
+def extract_numeric_features(
+    df: pd.DataFrame, config: TokenizationConfig
+) -> Tuple[np.ndarray, List[str]]:
+    """
+    Extract numeric feature columns from DataFrame.
+
+    Args:
+        df: Input DataFrame
+        config: Configuration object
+
+    Returns:
+        features: NumPy array of shape [num_samples, num_features]
+        feature_names: List of feature column names
+    """
+    # Identify feature columns (exclude code, labels, and metadata)
+    all_cols = set(df.columns)
+    exclude_cols = set(config.feature_columns_exclude)
+    feature_cols = sorted(list(all_cols - exclude_cols))
+
+    # Select only numeric columns
+    numeric_feature_cols = []
+    for col in feature_cols:
+        if df[col].dtype in [np.float32, np.float64, np.int32, np.int64, np.int8, np.int16]:
+            numeric_feature_cols.append(col)
+
+    if len(numeric_feature_cols) == 0:
+        logger.warning("⚠️ No numeric features found. Using code-only mode.")
+        return np.zeros((len(df), 0), dtype=np.float32), []
+
+    logger.info(f"📊 Extracted {len(numeric_feature_cols)} numeric feature columns")
+
+    # Extract features as NumPy array
+    features = df[numeric_feature_cols].values.astype(np.float32)
+
+    return features, numeric_feature_cols
+
+
+def normalize_features(
+    features: np.ndarray, scaler: Optional[StandardScaler] = None, fit: bool = False
+) -> Tuple[np.ndarray, StandardScaler]:
+    """
+    Normalize features using StandardScaler.
+
+    Args:
+        features: NumPy array of shape [num_samples, num_features]
+        scaler: Pre-fitted scaler (for val/test)
+        fit: Whether to fit the scaler (True for train, False for val/test)
+
+    Returns:
+        normalized_features: Normalized features
+        scaler: Fitted scaler
+    """
+    if features.shape[1] == 0:
+        return features, None
+
+    if fit:
+        scaler = StandardScaler()
+        normalized = scaler.fit_transform(features)
+        logger.info(f"✅ Fitted StandardScaler on {features.shape[0]} samples")
+    else:
+        if scaler is None:
+            logger.warning("⚠️ No scaler provided for normalization. Skipping.")
+            return features, None
+        normalized = scaler.transform(features)
+        logger.info(f"✅ Transformed features using existing scaler")
+
+    return normalized.astype(np.float32), scaler
 
 
 # ============================================================================
@@ -532,65 +569,93 @@ def collate_fn_dynamic(
 
 
 def tokenize_dataset_batch(
-    data: List[Dict],
+    df: pd.DataFrame,
+    features: np.ndarray,
     tokenizer,
     config: TokenizationConfig,
     split_name: str,
-    error_tracker: ErrorTracker,
 ) -> Dict[str, torch.Tensor]:
     """
-    Tokenize dataset with FAST batch processing - tokenizes all at once instead of one-by-one.
+    Tokenize dataset with FAST batch processing and include numeric features.
 
-    Rewards: ✅ 10-50x faster than per-sample tokenization
-    Penalties: ❌ Memory errors, ❌ Shape mismatches
+    Args:
+        df: DataFrame with code and is_vulnerable columns
+        features: NumPy array of numeric features [num_samples, num_features]
+        tokenizer: HuggingFace tokenizer
+        config: Configuration object
+        split_name: Name of the split
+
+    Returns:
+        Dict with input_ids, attention_mask, labels, features tensors
     """
-    logger.info(f"🔄 Fast batch tokenizing {split_name} split ({len(data)} samples)...")
+    logger.info(f"🔄 Fast batch tokenizing {split_name} split ({len(df)} samples)...")
 
     # Shuffle training data for better generalization
     if split_name == "train" and config.shuffle_train:
         logger.info(f"🔀 Shuffling training data (seed={config.random_seed})...")
-        random.shuffle(data)
+        indices = np.arange(len(df))
+        np.random.shuffle(indices)
+        df = df.iloc[indices].reset_index(drop=True)
+        features = features[indices]
 
-    # Extract all code and labels
-    all_code = []
-    all_labels = []
-    failed_indices = []
-
-    logger.info(f"📦 Extracting code and labels...")
-    for idx, sample in enumerate(tqdm(data, desc="Extracting data")):
-        try:
-            code = str(sample.get("code", ""))
-            if not code or code.strip() == "":
-                raise ValueError("Empty code field")
-
-            label = int(sample.get("is_vulnerable", False))
-            if config.strict_binary_labels and label not in [0, 1]:
-                raise ValueError(f"Invalid label value: {label}")
-
-            all_code.append(code)
-            all_labels.append(label)
-        except Exception as e:
-            row_id = sample.get("id", f"row_{idx}")
-            error_tracker.log_error(
-                row_id, split_name, type(e).__name__, str(e), sample
-            )
-            failed_indices.append(idx)
-
-            if not config.skip_on_error:
-                raise
-
-    logger.info(
-        f"✅ Extracted {len(all_code)} valid samples (failed: {len(failed_indices)})"
-    )
-
-    if len(all_code) == 0:
-        raise ValueError(f"No valid samples in {split_name}")
+    # Extract code and labels
+    all_code = df["code"].astype(str).tolist()
+    all_labels = df["is_vulnerable"].astype(int).tolist()
 
     # CHUNKED BATCH TOKENIZATION - process in chunks to avoid OOM
     chunk_size = 10000  # Process 10k samples at a time
     num_chunks = (len(all_code) + chunk_size - 1) // chunk_size
 
     logger.info(f"⚡ Batch tokenizing in {num_chunks} chunks of {chunk_size} samples...")
+
+    all_input_ids = []
+    all_attention_masks = []
+
+    try:
+        padding_strategy = "max_length"  # Always use max_length for consistent shapes
+
+        for i in tqdm(range(0, len(all_code), chunk_size), desc=f"Tokenizing {split_name}"):
+            chunk_code = all_code[i:i + chunk_size]
+
+            # Tokenize chunk
+            encoded = tokenizer(
+                chunk_code,
+                max_length=config.max_seq_length,
+                padding=padding_strategy,
+                truncation=config.truncation,
+                return_tensors="pt",
+                return_attention_mask=config.return_attention_mask,
+            )
+
+            all_input_ids.append(encoded["input_ids"])
+            all_attention_masks.append(encoded["attention_mask"])
+
+        # Concatenate all chunks
+        logger.info(f"🔗 Concatenating {len(all_input_ids)} chunks...")
+        tokenized_data = {
+            "input_ids": torch.cat(all_input_ids, dim=0),
+            "attention_mask": torch.cat(all_attention_masks, dim=0),
+            "labels": torch.tensor(all_labels, dtype=torch.long),
+            "features": torch.from_numpy(features).float(),
+        }
+
+        # Log statistics
+        logger.info(f"✅ {split_name} tokenization complete:")
+        logger.info(f"   Input IDs shape: {tokenized_data['input_ids'].shape}")
+        logger.info(f"   Attention mask shape: {tokenized_data['attention_mask'].shape}")
+        logger.info(f"   Labels shape: {tokenized_data['labels'].shape}")
+        logger.info(f"   Features shape: {tokenized_data['features'].shape}")
+
+        # Memory usage info
+        input_ids_size_mb = tokenized_data["input_ids"].element_size() * tokenized_data["input_ids"].nelement() / (1024 * 1024)
+        features_size_mb = tokenized_data["features"].element_size() * tokenized_data["features"].nelement() / (1024 * 1024)
+        logger.info(f"   Memory usage: ~{input_ids_size_mb * 2 + features_size_mb:.1f} MB")
+
+        return tokenized_data
+
+    except Exception as e:
+        logger.error(f"❌ PENALTY: Tokenization failed for {split_name}: {e}")
+        raise
 
     all_input_ids = []
     all_attention_masks = []
@@ -661,15 +726,18 @@ def validate_tokenized_data(
     config: TokenizationConfig,
 ) -> None:
     """
-    Validate tokenized data shapes and content.
+    Validate tokenized data shapes and content (including features).
 
-    Rewards: ✅ Correct shapes and types
-    Penalties: ❌ Shape mismatches, ❌ Invalid labels
+    Args:
+        tokenized_data: Dict with input_ids, attention_mask, labels, features
+        split_name: Name of the split
+        expected_samples: Expected number of samples
+        config: Configuration object
     """
     logger.info(f"🔍 Validating {split_name} tokenized data...")
 
     # Check keys
-    required_keys = ["input_ids", "attention_mask", "labels"]
+    required_keys = ["input_ids", "attention_mask", "labels", "features"]
     missing_keys = [key for key in required_keys if key not in tokenized_data]
     if missing_keys:
         logger.error(f"❌ PENALTY: Missing keys in {split_name}: {missing_keys}")
@@ -679,6 +747,7 @@ def validate_tokenized_data(
     input_ids = tokenized_data["input_ids"]
     attention_mask = tokenized_data["attention_mask"]
     labels = tokenized_data["labels"]
+    features = tokenized_data["features"]
 
     if input_ids.shape[0] != expected_samples:
         logger.error(
@@ -702,6 +771,10 @@ def validate_tokenized_data(
         logger.error(f"❌ PENALTY: Label count mismatch in {split_name}")
         raise ValueError(f"Label count mismatch")
 
+    if features.shape[0] != expected_samples:
+        logger.error(f"❌ PENALTY: Feature count mismatch in {split_name}")
+        raise ValueError(f"Feature count mismatch")
+
     # Check label values
     unique_labels = labels.unique().tolist()
     if not all(label in [0, 1] for label in unique_labels):
@@ -713,6 +786,20 @@ def validate_tokenized_data(
     # Check data types
     if input_ids.dtype != torch.long or attention_mask.dtype != torch.long:
         logger.error(f"❌ PENALTY: Invalid dtype for input_ids or attention_mask")
+        raise ValueError(f"Invalid dtype")
+
+    if labels.dtype != torch.long:
+        logger.error(f"❌ PENALTY: Invalid dtype for labels")
+        raise ValueError(f"Invalid dtype")
+
+    if features.dtype != torch.float32:
+        logger.error(f"❌ PENALTY: Invalid dtype for features (expected float32, got {features.dtype})")
+        raise ValueError(f"Invalid dtype")
+
+    logger.info(f"✅ {split_name} validation passed!")
+    logger.info(f"   Input shape: {input_ids.shape}")
+    logger.info(f"   Feature shape: {features.shape}")
+    logger.info(f"   Label distribution: {Counter(labels.tolist())}")
         raise ValueError(f"Invalid dtype")
 
     if labels.dtype != torch.long:
@@ -758,8 +845,9 @@ def sanity_check(output_path: str, split_name: str) -> None:
     """
     Perform sanity check by loading saved data.
 
-    Rewards: ✅ Successful load and shape verification
-    Penalties: ❌ Load errors
+    Args:
+        output_path: Path to saved .pt file
+        split_name: Name of the split
     """
     try:
         logger.info(f"🔍 Sanity check: Loading {split_name}...")
@@ -768,9 +856,10 @@ def sanity_check(output_path: str, split_name: str) -> None:
         logger.info(f"✅ {split_name} sanity check passed!")
         logger.info(f"   Keys: {list(data.keys())}")
         logger.info(f"   Input IDs shape: {data['input_ids'].shape}")
+        logger.info(f"   Features shape: {data['features'].shape}")
         logger.info(
-            f"   First batch (shape): input_ids={data['input_ids'][:4].shape}, "
-            f"labels={data['labels'][:4].tolist()}"
+            f"   First batch: input_ids={data['input_ids'][:4].shape}, "
+            f"labels={data['labels'][:4].tolist()}, features={data['features'][:4].shape}"
         )
 
     except Exception as e:
@@ -785,53 +874,50 @@ def sanity_check(output_path: str, split_name: str) -> None:
 
 def process_and_persist_split(
     split_name: str,
-    data: List[Dict],
+    df: pd.DataFrame,
+    features: np.ndarray,
     tokenizer,
     config: TokenizationConfig,
-    error_tracker: ErrorTracker,
-) -> Dict[str, torch.Tensor]:
+    scaler: Optional[StandardScaler] = None,
+) -> Tuple[Dict[str, torch.Tensor], StandardScaler]:
     """
-    End-to-end handling for a single split:
-      - try cache
-      - tokenizes (chunked)
+    End-to-end handling for a single split with multimodal features:
+      - tokenizes code (chunked)
+      - includes numeric features
       - validates shapes & labels
-      - saves to cache and final output
+      - saves to final output
       - performs sanity check
-    Returns the tokenized_data dict.
 
-    Rewards: ✅ Complete split processing with validation
-    Penalties: ❌ Any failure in the pipeline
+    Args:
+        split_name: Name of the split
+        df: DataFrame with code and labels
+        features: NumPy array of numeric features
+        tokenizer: HuggingFace tokenizer
+        config: Configuration object
+        scaler: Pre-fitted scaler (for val/test)
+
+    Returns:
+        tokenized_data: Dict with all tensors
+        scaler: Fitted scaler (for train) or input scaler (for val/test)
     """
     logger.info(f"\n[PROCESS] Starting processing for split: {split_name}")
 
-    # Try to load from cache first
-    tokenized = load_from_cache(split_name, config)
-    if tokenized is not None:
-        # Validate loaded cache quickly
-        try:
-            validate_tokenized_data(tokenized, split_name, len(data), config)
-            logger.info(f"✅ Cache validated for {split_name}")
-            return tokenized
-        except Exception as e:
-            logger.warning(
-                f"⚠️ Cache validation failed for {split_name}: {e}. Retokenizing..."
-            )
+    # Normalize features
+    if config.normalize_features and features.shape[1] > 0:
+        if split_name == "train":
+            features, scaler = normalize_features(features, scaler=None, fit=True)
+        else:
+            features, _ = normalize_features(features, scaler=scaler, fit=False)
 
-    # Tokenize fresh
+    # Tokenize
     tokenized = tokenize_dataset_batch(
-        data, tokenizer, config, split_name, error_tracker
+        df, features, tokenizer, config, split_name
     )
 
     # Validate tokenized data
     validate_tokenized_data(
         tokenized, split_name, tokenized["input_ids"].shape[0], config
     )
-
-    # Save to cache (if enabled)
-    try:
-        save_to_cache(tokenized, split_name, config)
-    except Exception as e:
-        logger.warning(f"⚠️ Unable to cache {split_name}: {e} (continuing)")
 
     # Persist final dataset to configured output path
     output_map = {
@@ -849,7 +935,7 @@ def process_and_persist_split(
     # Sanity check saved file
     sanity_check(out_path, split_name)
 
-    return tokenized
+    return tokenized, scaler
 
 
 def assert_outputs_exist(config: TokenizationConfig):
@@ -874,150 +960,105 @@ def assert_outputs_exist(config: TokenizationConfig):
 
 def main():
     """
-    Main tokenization pipeline with reinforcement logic and enhanced features.
-
-    Rewards accumulate for each successful step.
-    Penalties trigger on any failure.
+    Main tokenization pipeline with multimodal features (code + numeric features).
     """
     config = TokenizationConfig()
-    reward_score = 0
-    error_tracker = None
 
     logger.info("=" * 80)
-    logger.info("🚀 CodeBERT Tokenization Pipeline - Enhanced Production Mode")
+    logger.info("🚀 CodeBERT Multimodal Tokenization Pipeline")
     logger.info("=" * 80)
     logger.info(f"📋 Configuration:")
     logger.info(f"   Model: {config.model_name}")
     logger.info(f"   Max sequence length: {config.max_seq_length}")
-    logger.info(f"   Dynamic padding: {config.dynamic_padding}")
-    logger.info(f"   Batch size: {config.batch_size}")
-    logger.info(f"   Num workers: {config.num_workers}")
+    logger.info(f"   Normalize features: {config.normalize_features}")
     logger.info(f"   Random seed: {config.random_seed}")
     logger.info(f"   Shuffle training: {config.shuffle_train}")
-    logger.info(f"   Use cache: {config.use_cache}")
-    logger.info(f"   Skip on error: {config.skip_on_error}")
-    logger.info(f"   Strict binary labels: {config.strict_binary_labels}")
 
     try:
         # ====================================================================
-        # STEP 0: Set Random Seed
+        # STEP 1: Set Random Seed
         # ====================================================================
-        logger.info("\n[STEP 0/7] Setting random seed for reproducibility...")
+        logger.info("\n[STEP 1/6] Setting random seed for reproducibility...")
         set_seed(config.random_seed)
-        logger.info(f"✅ REWARD +5: Seed set for reproducibility")
-        reward_score += 5
+        logger.info(f"✅ Seed set for reproducibility")
 
         # ====================================================================
-        # STEP 1: Initialize Error Tracker
+        # STEP 2: Initialize Output Directory
         # ====================================================================
-        logger.info("\n[STEP 1/7] Initializing error tracker...")
+        logger.info("\n[STEP 2/6] Creating output directory...")
         os.makedirs(config.output_base, exist_ok=True)
-        error_tracker = ErrorTracker(config)
-        logger.info(f"✅ REWARD +5: Error tracker initialized")
-        reward_score += 5
+        logger.info(f"✅ Output directory ready: {config.output_base}")
 
         # ====================================================================
-        # STEP 2: Load Tokenizer
+        # STEP 3: Load Tokenizer
         # ====================================================================
-        logger.info("\n[STEP 2/7] Loading tokenizer...")
+        logger.info("\n[STEP 3/6] Loading tokenizer...")
         tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-        logger.info(f"✅ REWARD +10: Tokenizer loaded successfully")
-        reward_score += 10
+        logger.info(f"✅ Tokenizer loaded successfully")
 
         # ====================================================================
-        # STEP 3: Load Data
+        # STEP 4: Load and Validate Data
         # ====================================================================
-        logger.info("\n[STEP 3/7] Loading datasets...")
-        train_data = load_jsonl(config.train_path)
-        val_data = load_jsonl(config.val_path)
-        test_data = load_jsonl(config.test_path)
-        logger.info(f"✅ REWARD +10: All datasets loaded successfully")
-        reward_score += 10
+        logger.info("\n[STEP 4/6] Loading datasets...")
+        train_df = load_jsonl(config.train_path)
+        val_df = load_jsonl(config.val_path)
+        test_df = load_jsonl(config.test_path)
+        logger.info(f"✅ All datasets loaded successfully")
+
+        logger.info("\n[STEP 4/6] Validating datasets...")
+        validate_data(train_df, "train", config)
+        validate_data(val_df, "val", config)
+        validate_data(test_df, "test", config)
+        logger.info(f"✅ All datasets validated successfully")
 
         # ====================================================================
-        # STEP 4: Validate Data
+        # STEP 5: Extract Features
         # ====================================================================
-        logger.info("\n[STEP 4/7] Validating datasets...")
-        validate_data(train_data, "train", config)
-        validate_data(val_data, "val", config)
-        validate_data(test_data, "test", config)
-        logger.info(f"✅ REWARD +10: All datasets validated successfully")
-        reward_score += 10
+        logger.info("\n[STEP 5/6] Extracting numeric features...")
+        train_features, feature_names = extract_numeric_features(train_df, config)
+        val_features, _ = extract_numeric_features(val_df, config)
+        test_features, _ = extract_numeric_features(test_df, config)
+
+        logger.info(f"✅ Extracted features:")
+        logger.info(f"   Feature count: {len(feature_names)}")
+        logger.info(f"   Train features shape: {train_features.shape}")
+        logger.info(f"   Val features shape: {val_features.shape}")
+        logger.info(f"   Test features shape: {test_features.shape}")
+        if len(feature_names) > 0:
+            logger.info(f"   Sample features: {feature_names[:5]}")
 
         # ====================================================================
-        # STEP 5-7: Tokenize -> Validate -> Save -> Sanity-check (Consolidated)
+        # STEP 6: Tokenize and Persist All Splits
         # ====================================================================
-        logger.info(
-            "\n[STEP 5-7] Tokenize -> Validate -> Save -> Sanity-check for all splits"
+        logger.info("\n[STEP 6/6] Tokenizing and persisting all splits...")
+
+        # Process train (fit scaler)
+        logger.info("\n--- Processing TRAIN split ---")
+        train_tokenized, scaler = process_and_persist_split(
+            "train", train_df, train_features, tokenizer, config, scaler=None
         )
+        logger.info(f"✅ Train tokenization & persist complete")
 
-        # Process train
-        train_tokenized = process_and_persist_split(
-            "train", train_data, tokenizer, config, error_tracker
+        # Process val (use fitted scaler)
+        logger.info("\n--- Processing VAL split ---")
+        val_tokenized, _ = process_and_persist_split(
+            "val", val_df, val_features, tokenizer, config, scaler=scaler
         )
-        logger.info(f"✅ REWARD +30: Train tokenization & persist complete")
-        reward_score += 30
+        logger.info(f"✅ Validation tokenization & persist complete")
 
-        # Process val
-        val_tokenized = process_and_persist_split(
-            "val", val_data, tokenizer, config, error_tracker
+        # Process test (use fitted scaler)
+        logger.info("\n--- Processing TEST split ---")
+        test_tokenized, _ = process_and_persist_split(
+            "test", test_df, test_features, tokenizer, config, scaler=scaler
         )
-        logger.info(f"✅ REWARD +30: Validation tokenization & persist complete")
-        reward_score += 30
-
-        # Process test
-        test_tokenized = process_and_persist_split(
-            "test", test_data, tokenizer, config, error_tracker
-        )
-        logger.info(f"✅ REWARD +30: Test tokenization & persist complete")
-        reward_score += 30
+        logger.info(f"✅ Test tokenization & persist complete")
 
         # ====================================================================
-        # STEP 8: Final Validation
+        # STEP 7: Final Verification
         # ====================================================================
-        logger.info("\n[STEP 8] Final validation of all tokenized datasets...")
-
-        validate_tokenized_data(
-            train_tokenized, "train", train_tokenized["input_ids"].shape[0], config
-        )
-        validate_tokenized_data(
-            val_tokenized, "val", val_tokenized["input_ids"].shape[0], config
-        )
-        validate_tokenized_data(
-            test_tokenized, "test", test_tokenized["input_ids"].shape[0], config
-        )
-        logger.info(f"✅ REWARD +20: All tokenized datasets validated successfully")
-        reward_score += 20
-
-        # ====================================================================
-        # STEP 9: Assert Outputs Exist
-        # ====================================================================
-        logger.info("\n[STEP 9] Verifying all output files exist...")
+        logger.info("\n[STEP 7/7] Verifying all output files exist...")
         assert_outputs_exist(config)
-        logger.info(f"✅ REWARD +10: All output files verified")
-        reward_score += 10
-
-        # ====================================================================
-        # Error Summary
-        # ====================================================================
-        logger.info("\n[ERROR SUMMARY]")
-        total_errors = error_tracker.get_error_count()
-        train_errors = error_tracker.get_error_count("train")
-        val_errors = error_tracker.get_error_count("val")
-        test_errors = error_tracker.get_error_count("test")
-
-        logger.info(f"📊 Error Statistics:")
-        logger.info(f"   Total errors: {total_errors}")
-        logger.info(f"   Train errors: {train_errors}")
-        logger.info(f"   Val errors: {val_errors}")
-        logger.info(f"   Test errors: {test_errors}")
-        logger.info(f"   Error log: {config.error_log}")
-
-        if total_errors > 0:
-            logger.info(
-                f"⚠️ WARNING: {total_errors} samples failed tokenization but were handled gracefully"
-            )
-            reward_score -= min(total_errors, 10)  # Small penalty for errors
+        logger.info(f"✅ All output files verified")
 
         # ====================================================================
         # FINAL SUMMARY
@@ -1025,23 +1066,28 @@ def main():
         logger.info("\n" + "=" * 80)
         logger.info("🎉 PIPELINE COMPLETED SUCCESSFULLY!")
         logger.info("=" * 80)
-        logger.info(f"🏆 FINAL REWARD SCORE: {reward_score}/200 (adjusted for errors)")
         logger.info(f"\n📁 Output Directory: {config.output_base}")
-        logger.info(f"   ├── train_tokenized_codebert.pt ({len(train_data)} samples)")
-        logger.info(f"   ├── val_tokenized_codebert.pt ({len(val_data)} samples)")
-        logger.info(f"   ├── test_tokenized_codebert.pt ({len(test_data)} samples)")
-        if config.use_cache:
-            logger.info(f"   └── .cache/ (cached tokenized data)")
-        logger.info(f"\n📝 Logs:")
-        logger.info(f"   ├── /kaggle/working/tokenization.log")
-        logger.info(f"   └── {config.error_log}")
-        logger.info("\n✅ Ready for fine-tuning!")
-        logger.info("\n🎁 Enhanced Features:")
-        logger.info(f"   ✅ Chunked batch tokenization (memory-safe)")
-        logger.info(f"   ✅ Caching: {'ON' if config.use_cache else 'OFF'}")
-        logger.info(
-            f"   ✅ Error resilience: {'ON' if config.skip_on_error else 'OFF'}"
-        )
+        logger.info(f"   ├── train_tokenized_codebert.pt ({len(train_df)} samples)")
+        logger.info(f"   ├── val_tokenized_codebert.pt ({len(val_df)} samples)")
+        logger.info(f"   └── test_tokenized_codebert.pt ({len(test_df)} samples)")
+        logger.info(f"\n📊 Output Structure (per .pt file):")
+        logger.info(f"   ├── input_ids: {train_tokenized['input_ids'].shape}")
+        logger.info(f"   ├── attention_mask: {train_tokenized['attention_mask'].shape}")
+        logger.info(f"   ├── labels: {train_tokenized['labels'].shape}")
+        logger.info(f"   └── features: {train_tokenized['features'].shape}")
+        logger.info(f"\n✅ Ready for multimodal fine-tuning with use_features=True!")
+
+    except Exception as e:
+        logger.error("\n" + "=" * 80)
+        logger.error("❌ PIPELINE FAILED!")
+        logger.error("=" * 80)
+        logger.error(f"Error: {type(e).__name__}: {e}")
+        logger.error("\n💡 Troubleshooting:")
+        logger.error("   1. Check input paths exist")
+        logger.error("   2. Verify JSONL format is valid")
+        logger.error("   3. Ensure sufficient memory")
+        logger.error("   4. Check log file for details")
+        raise
         logger.info(f"   ✅ Reproducible (seed={config.random_seed})")
         logger.info(f"   ✅ Train shuffling: {'ON' if config.shuffle_train else 'OFF'}")
         logger.info(f"   ✅ Consolidated split processing pipeline")
@@ -1066,9 +1112,10 @@ def main():
 
     finally:
         # Cleanup
-        if error_tracker:
-            error_tracker.close()
-            logger.info("🧹 Error tracker closed")
+        logger.error("   2. Verify JSONL format is valid")
+        logger.error("   3. Ensure sufficient memory")
+        logger.error("   4. Check log file for details")
+        raise
 
 
 if __name__ == "__main__":
@@ -1080,13 +1127,5 @@ if __name__ == "__main__":
         # Already set, ignore
         pass
 
-    final_score = main()
+    main()
 
-    if final_score >= 180:
-        print(
-            "\n🎊 EXCELLENT SCORE! Pipeline executed successfully with minimal errors! 🎊"
-        )
-    elif final_score >= 160:
-        print("\n✅ GOOD SCORE! Pipeline completed with some warnings. ✅")
-    else:
-        print("\n⚠️ COMPLETED WITH ISSUES. Check logs for details. ⚠️")
