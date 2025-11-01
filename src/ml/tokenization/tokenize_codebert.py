@@ -928,11 +928,19 @@ def main():
         # STEP 3: Load Tokenizer
         # ====================================================================
         logger.info("\n[STEP 3/6] Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            config.model_name,
-            trust_remote_code=False,
-            use_fast=True
-        )
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.model_name,
+                trust_remote_code=False,
+                use_fast=True
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Fast tokenizer failed, trying basic tokenizer: {e}")
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.model_name,
+                trust_remote_code=False,
+                use_fast=False
+            )
         logger.info(f"✅ Tokenizer loaded successfully")
 
         # ====================================================================
