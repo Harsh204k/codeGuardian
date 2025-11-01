@@ -1,27 +1,28 @@
 # type: ignore
 
 """
-Enhanced GraphCodeBERT Fine-Tuning with LoRA (r=16) for IIT Delhi Hackathon Stage I
-====================================================================================
+Enhanced GraphCodeBERT Fine-Tuning with LoRA for Vulnerability Detection
+===============================================================================
 
-This script fine-tunes GraphCodeBERT with enhanced LoRA configuration for maximum
-performance on code vulnerability detection. Optimized for Kaggle T4 and A100.
+Production-ready LoRA fine-tuning script optimized for Kaggle Free GPU.
+Supports pre-tokenized .pt datasets with optional engineered features.
 
-Key Enhancements for Stage I:
-- LoRA r=16, α=32, dropout=0.1 (increased from r=8)
-- Fine-tune last encoder block + final classification layer
-- Early stopping based on validation F1
-- Mixed precision (BF16 on A100, FP16 on T4)
-- Confidence calibration sweep
-- Explainability-ready outputs
+Key Features:
+- LoRA r=16, α=32, dropout=0.1
+- Mixed precision (BF16 on A100, FP16 on T4/P100)
+- Weighted BCE loss with class balancing
+- Early stopping on validation F1
+- Gradient accumulation & checkpointing
+- Per-language metrics tracking
+- Auto OOM recovery
+- Comprehensive logging
 
 Hardware Support:
-- T4 (Turing, compute 7.5): Uses FP16
-- P100 (Pascal, compute 6.0): Uses FP16
-- A100 (Ampere, compute 8.0+): Uses BF16
+- Kaggle T4/P100: 16GB VRAM, FP16
+- A100/V100: BF16 support
 
 Author: CodeGuardian Team - IIT Delhi Hackathon
-Date: October 2025
+Date: November 2025
 """
 
 # Fix httpx compatibility issue on Kaggle
@@ -59,21 +60,41 @@ import os
 import gc
 import json
 import time
+import logging
+import csv
+import argparse
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Any
+import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 from torch.cuda.amp import autocast, GradScaler
 from transformers import RobertaModel, RobertaConfig, get_linear_schedule_with_warmup
 from peft import LoraConfig, get_peft_model, TaskType
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    classification_report,
+    confusion_matrix,
+)
 from tqdm import tqdm
 import warnings
 
 warnings.filterwarnings("ignore")
 
-# Enable TF32 for faster matmul on Ampere GPUs (T4 compatible)
+# Enable deterministic behavior
+torch.manual_seed(42)
+np.random.seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# Enable TF32 for faster matmul on Ampere GPUs
 torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.benchmark = True
 
 # ============================================================================
 # GPU CAPABILITY DETECTION
