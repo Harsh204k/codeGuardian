@@ -603,7 +603,7 @@ def tokenize_dataset_batch(
     all_labels = df["is_vulnerable"].astype(int).tolist()
 
     # CHUNKED BATCH TOKENIZATION - process in chunks to avoid OOM
-    chunk_size = 10000  # Process 10k samples at a time
+    chunk_size = 5000  # Reduced to 5k samples at a time for GraphCodeBERT
     num_chunks = (len(all_code) + chunk_size - 1) // chunk_size
 
     logger.info(f"⚡ Batch tokenizing in {num_chunks} chunks of {chunk_size} samples...")
@@ -629,9 +629,19 @@ def tokenize_dataset_batch(
 
             all_input_ids.append(encoded["input_ids"])
             all_attention_masks.append(encoded["attention_mask"])
+            
+            # Clear memory after each chunk
+            del encoded
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         # Concatenate all chunks
         logger.info(f"🔗 Concatenating {len(all_input_ids)} chunks...")
+        
+        # Free up memory before concatenation
+        import gc
+        gc.collect()
+        
         tokenized_data = {
             "input_ids": torch.cat(all_input_ids, dim=0),
             "attention_mask": torch.cat(all_attention_masks, dim=0),
@@ -900,7 +910,7 @@ def main():
     config = TokenizationConfig()
 
     logger.info("=" * 80)
-    logger.info("🚀 graphcodebert Multimodal Tokenization Pipeline")
+    logger.info("🚀 GraphCodeBERT Multimodal Tokenization Pipeline")
     logger.info("=" * 80)
     logger.info(f"📋 Configuration:")
     logger.info(f"   Model: {config.model_name}")
@@ -1001,6 +1011,10 @@ def main():
             "train", train_df, train_features, tokenizer, config, scaler=None
         )
         logger.info(f"✅ Train tokenization & persist complete")
+        
+        # Clear memory after train
+        import gc
+        gc.collect()
 
         # Process val (use fitted scaler)
         logger.info("\n--- Processing VAL split ---")
@@ -1008,6 +1022,9 @@ def main():
             "val", val_df, val_features, tokenizer, config, scaler=scaler
         )
         logger.info(f"✅ Validation tokenization & persist complete")
+        
+        # Clear memory after val
+        gc.collect()
 
         # Process test (use fitted scaler)
         logger.info("\n--- Processing TEST split ---")
@@ -1032,7 +1049,7 @@ def main():
         logger.info(f"\n📁 Output Directory: {config.output_base}")
         logger.info(f"   ├── train_tokenized_graphcodebert.pt ({len(train_df)} samples)")
         logger.info(f"   ├── val_tokenized_graphcodebert.pt ({len(val_df)} samples)")
-        logger.info(f"   └── test_tokenized_graphgraphcodebert.pt ({len(test_df)} samples)")
+        logger.info(f"   └── test_tokenized_graphcodebert.pt ({len(test_df)} samples)")
         logger.info(f"\n📊 Output Structure (per .pt file):")
         logger.info(f"   ├── input_ids: {train_tokenized['input_ids'].shape}")
         logger.info(f"   ├── attention_mask: {train_tokenized['attention_mask'].shape}")
