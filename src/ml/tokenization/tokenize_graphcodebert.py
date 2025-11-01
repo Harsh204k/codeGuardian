@@ -993,7 +993,11 @@ def main():
         # STEP 3: Load Tokenizer
         # ====================================================================
         logger.info("\n[STEP 3/6] Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.model_name,
+            trust_remote_code=False,
+            use_fast=True
+        )
         logger.info(f"✅ Tokenizer loaded successfully")
 
         # ====================================================================
