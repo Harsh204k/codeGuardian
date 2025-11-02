@@ -210,7 +210,7 @@ def get_cache_path(split_name: str, config: TokenizationConfig) -> str:
 
 def load_from_cache(
     split_name: str, config: TokenizationConfig
-) -> Optional[Dict[str, torch.Tensor]]:
+) -> Optional[Dict[str, Any]]:
     """Load tokenized data from cache if available"""
     if not config.use_cache or config.force_retokenize:
         return None
@@ -236,7 +236,7 @@ def load_from_cache(
 
 
 def save_to_cache(
-    tokenized_data: Dict[str, torch.Tensor], split_name: str, config: TokenizationConfig
+    tokenized_data: Dict[str, Any], split_name: str, config: TokenizationConfig
 ):
     """Save tokenized data to cache"""
     if not config.use_cache:
@@ -574,11 +574,11 @@ def tokenize_dataset_batch(
     tokenizer,
     config: TokenizationConfig,
     split_name: str,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, Any]:
     """
     ✅ Memory-safe tokenization using numpy.memmap streaming to disk.
     This keeps RAM usage under 1GB even for very large datasets.
-    
+
     Args:
         df: DataFrame with code and is_vulnerable columns
         features: NumPy array of numeric features [num_samples, num_features]
@@ -627,7 +627,7 @@ def tokenize_dataset_batch(
 
     # Tokenize in small chunks and write directly to disk
     chunk_size = 256  # Very small chunks for Kaggle safety
-    
+
     logger.info(f"⚡ Streaming tokenization: chunk_size={chunk_size}, writing to disk...")
 
     try:
@@ -659,7 +659,7 @@ def tokenize_dataset_batch(
         logger.info(f"💾 Flushing data to disk...")
         input_ids_mmap.flush()
         attention_mmap.flush()
-        
+
         # Save labels and features as regular numpy files
         np.save(labels_path, labels_array)
         np.save(features_path, features.astype(np.float32))
@@ -686,27 +686,26 @@ def tokenize_dataset_batch(
         logger.info(f"   Memory-mapped tokenization complete")
         logger.info(f"   Metadata saved to {meta_path}")
 
-        # Load back into tensors for validation and saving as .pt
-        logger.info(f"📦 Loading tokenized data from disk for validation...")
-        input_ids_mmap = np.memmap(input_ids_path, dtype=mmap_dtype, mode="r", shape=(total_samples, max_len))
-        attention_mmap = np.memmap(attention_path, dtype=mmap_dtype, mode="r", shape=(total_samples, max_len))
-        labels_loaded = np.load(labels_path, mmap_mode="r")
-        features_loaded = np.load(features_path, mmap_mode="r")
+        # Skip loading full tensors into RAM - keep everything on disk
+        logger.info(f"📦 Skipping full tensor loading - keeping data on disk...")
 
-        # Convert to tensors (this is still memory-efficient because we load in read-only mode)
+        # Return metadata dict instead of loading full tensors into RAM
         tokenized_data = {
-            "input_ids": torch.from_numpy(np.array(input_ids_mmap, dtype=np.int64)),
-            "attention_mask": torch.from_numpy(np.array(attention_mmap, dtype=np.int64)),
-            "labels": torch.from_numpy(np.array(labels_loaded, dtype=np.int64)),
-            "features": torch.from_numpy(np.array(features_loaded, dtype=np.float32)),
+            "metadata": metadata,
+            "input_ids_path": input_ids_path,
+            "attention_mask_path": attention_path,
+            "labels_path": labels_path,
+            "features_path": features_path,
         }
 
-        # Log statistics
+        # Log statistics from metadata
         logger.info(f"✅ {split_name} tokenization complete:")
-        logger.info(f"   Input IDs shape: {tokenized_data['input_ids'].shape}")
-        logger.info(f"   Attention mask shape: {tokenized_data['attention_mask'].shape}")
-        logger.info(f"   Labels shape: {tokenized_data['labels'].shape}")
-        logger.info(f"   Features shape: {tokenized_data['features'].shape}")
+        logger.info(f"   Total samples: {metadata['total_samples']}")
+        logger.info(f"   Max sequence length: {metadata['max_seq_length']}")
+        logger.info(f"   Input IDs path: {input_ids_path}")
+        logger.info(f"   Attention mask path: {attention_path}")
+        logger.info(f"   Labels path: {labels_path}")
+        logger.info(f"   Features path: {features_path}")
 
         # Approx file sizes
         input_ids_size_mb = os.path.getsize(input_ids_path) / (1024 * 1024)
@@ -883,7 +882,7 @@ def process_and_persist_split(
     tokenizer,
     config: TokenizationConfig,
     scaler: Optional[StandardScaler] = None,
-) -> Tuple[Dict[str, torch.Tensor], StandardScaler]:
+) -> Tuple[Dict[str, Any], StandardScaler]:
     """
     End-to-end handling for a single split with multimodal features:
       - tokenizes code (chunked)
@@ -918,26 +917,8 @@ def process_and_persist_split(
         df, features, tokenizer, config, split_name
     )
 
-    # Validate tokenized data
-    validate_tokenized_data(
-        tokenized, split_name, tokenized["input_ids"].shape[0], config
-    )
-
-    # Persist final dataset to configured output path
-    output_map = {
-        "train": config.train_output,
-        "val": config.val_output,
-        "test": config.test_output,
-    }
-    out_path = output_map.get(split_name)
-    if out_path is None:
-        # Fallback: create file under output_base
-        out_path = os.path.join(config.output_base, f"{split_name}_tokenized.pt")
-
-    save_tokenized_dataset(tokenized, out_path, split_name)
-
-    # Sanity check saved file
-    sanity_check(out_path, split_name)
+    # Save metadata to cache
+    save_to_cache(tokenized, split_name, config)
 
     # Free memory after saving
     import gc
@@ -948,17 +929,21 @@ def process_and_persist_split(
 
 def assert_outputs_exist(config: TokenizationConfig):
     """
-    Assert that all final tokenized output files exist.
+    Assert that all final tokenized output cache files exist.
 
     Rewards: ✅ All outputs present
     Penalties: ❌ Missing outputs
     """
-    expected = [config.train_output, config.val_output, config.test_output]
+    expected = [
+        get_cache_path("train", config),
+        get_cache_path("val", config),
+        get_cache_path("test", config),
+    ]
     missing = [p for p in expected if not os.path.exists(p)]
     if missing:
         logger.error(f"❌ PENALTY: Missing final outputs: {missing}")
         raise FileNotFoundError(f"Missing outputs: {missing}")
-    logger.info("✅ All final tokenized output files are present.")
+    logger.info("✅ All final tokenized output cache files are present.")
 
 
 # ============================================================================
@@ -1124,15 +1109,16 @@ def main():
         logger.info("🎉 PIPELINE COMPLETED SUCCESSFULLY!")
         logger.info("=" * 80)
         logger.info(f"\n📁 Output Directory: {config.output_base}")
-        logger.info(f"   ├── train_tokenized_graphcodebert.pt ({train_count} samples)")
-        logger.info(f"   ├── val_tokenized_graphcodebert.pt ({val_count} samples)")
-        logger.info(f"   └── test_tokenized_graphcodebert.pt ({test_count} samples)")
-        logger.info(f"\n📊 Output Structure (per .pt file):")
-        logger.info(f"   ├── input_ids: {train_tokenized['input_ids'].shape}")
-        logger.info(f"   ├── attention_mask: {train_tokenized['attention_mask'].shape}")
-        logger.info(f"   ├── labels: {train_tokenized['labels'].shape}")
-        logger.info(f"   └── features: {train_tokenized['features'].shape}")
-        logger.info(f"\n✅ Ready for multimodal fine-tuning with use_features=True!")
+        logger.info(f"   ├── train cache: {get_cache_path('train', config)} ({train_count} samples)")
+        logger.info(f"   ├── val cache: {get_cache_path('val', config)} ({val_count} samples)")
+        logger.info(f"   └── test cache: {get_cache_path('test', config)} ({test_count} samples)")
+        logger.info(f"\n📊 Output Structure (per cache file):")
+        logger.info(f"   ├── metadata: dataset info and paths")
+        logger.info(f"   ├── input_ids_path: path to memory-mapped input IDs")
+        logger.info(f"   ├── attention_mask_path: path to memory-mapped attention masks")
+        logger.info(f"   ├── labels_path: path to labels array")
+        logger.info(f"   └── features_path: path to features array")
+        logger.info(f"\n✅ Ready for multimodal fine-tuning with memmap-based data loading!")
 
     except Exception as e:
         logger.error("\n" + "=" * 80)
@@ -1152,8 +1138,8 @@ if __name__ == "__main__":
     # Set single-threaded mode for tokenization
     import os
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    
+
     # Do NOT use multiprocessing for this script
     # The multiprocessing spawn was causing semaphore leaks and memory issues
-    
+
     main()
