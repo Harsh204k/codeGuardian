@@ -29,7 +29,7 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 from torch.utils.data import Dataset, DataLoader
 import multiprocessing as mp
-from functools
+from functools import partial
 import random
 import numpy as np
 from sklearn.preprocessing import StandardScaler
