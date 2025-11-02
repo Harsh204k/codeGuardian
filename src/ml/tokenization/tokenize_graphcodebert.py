@@ -626,7 +626,7 @@ def tokenize_dataset_batch(
     labels_array = np.empty(total_samples, dtype=np.int64)
 
     # Tokenize in small chunks and write directly to disk
-    chunk_size = 256  # Very small chunks for Kaggle safety
+    chunk_size = 128  # Very small chunks for Kaggle safety (reduced from 256)
 
     logger.info(f"⚡ Streaming tokenization: chunk_size={chunk_size}, writing to disk...")
 
@@ -986,8 +986,13 @@ def main():
         # STEP 3: Load Tokenizer
         # ====================================================================
         logger.info("\n[STEP 3/6] Loading tokenizer...")
-        # Disable chat template fetching to avoid 404 errors
+
+        # 🔒 Fully disable parallel threads in tokenizer & BLAS
         os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        os.environ["OMP_NUM_THREADS"] = "1"
+        os.environ["MKL_NUM_THREADS"] = "1"
+        os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
         try:
             tokenizer = AutoTokenizer.from_pretrained(
@@ -1138,6 +1143,9 @@ if __name__ == "__main__":
     # Set single-threaded mode for tokenization
     import os
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
     # Do NOT use multiprocessing for this script
     # The multiprocessing spawn was causing semaphore leaks and memory issues
