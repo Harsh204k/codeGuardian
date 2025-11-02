@@ -602,21 +602,28 @@ def tokenize_dataset_batch(
     all_code = df["code"].astype(str).tolist()
     all_labels = df["is_vulnerable"].astype(int).tolist()
 
-    # CHUNKED BATCH TOKENIZATION - process in chunks to avoid OOM
-    chunk_size = 1000  # DRASTICALLY REDUCED for GraphCodeBERT memory constraints
-    num_chunks = (len(all_code) + chunk_size - 1) // chunk_size
+    # STREAMING TOKENIZATION - preallocate final tensors and stream chunks
+    # Avoid holding many chunk tensors in memory which causes OOM.
+    chunk_size = 1000  # small chunk size for Kaggle
+    total_samples = len(all_code)
 
-    logger.info(f"⚡ Batch tokenizing in {num_chunks} chunks of {chunk_size} samples...")
-    logger.info(f"🧠 Memory-optimized mode: Processing very small chunks to avoid OOM")
+    logger.info(f"⚡ Streaming tokenizing {total_samples} samples in chunks of {chunk_size}...")
 
-    all_input_ids = []
-    all_attention_masks = []
+    # Pre-allocate final tensors on CPU to avoid extra copies during concatenation
+    try:
+        input_ids_final = torch.empty((total_samples, config.max_seq_length), dtype=torch.long)
+        attention_final = torch.empty((total_samples, config.max_seq_length), dtype=torch.long)
+    except Exception as e:
+        logger.error(f"❌ PENALTY: Failed to allocate final tensors ({e}). Reduce max_seq_length or batch size.")
+        raise
+
+    offset = 0
+    padding_strategy = "max_length"
 
     try:
-        padding_strategy = "max_length"  # Always use max_length for consistent shapes
-
-        for i in tqdm(range(0, len(all_code), chunk_size), desc=f"Tokenizing {split_name}"):
-            chunk_code = all_code[i:i + chunk_size]
+        for i in tqdm(range(0, total_samples, chunk_size), desc=f"Tokenizing {split_name}"):
+            chunk_code = all_code[i : i + chunk_size]
+            cur_len = len(chunk_code)
 
             # Tokenize chunk
             encoded = tokenizer(
@@ -628,50 +635,44 @@ def tokenize_dataset_batch(
                 return_attention_mask=config.return_attention_mask,
             )
 
-            # Immediately move to CPU and convert to reduce memory
-            all_input_ids.append(encoded["input_ids"].cpu())
-            all_attention_masks.append(encoded["attention_mask"].cpu())
-            
-            # Aggressive memory cleanup after each chunk
-            del encoded
-            del chunk_code
+            # Move to CPU and write into preallocated tensors
+            ids_cpu = encoded["input_ids"].to("cpu")
+            att_cpu = encoded["attention_mask"].to("cpu")
+
+            input_ids_final[offset : offset + cur_len, :] = ids_cpu
+            attention_final[offset : offset + cur_len, :] = att_cpu
+
+            offset += cur_len
+
+            # Aggressive cleanup
+            del encoded, ids_cpu, att_cpu, chunk_code
             import gc
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        # Concatenate all chunks
-        logger.info(f"🔗 Concatenating {len(all_input_ids)} chunks...")
-        
-        # Clear original data to free memory BEFORE concatenation
-        del all_code
-        del all_labels
-        import gc
-        gc.collect()
-        
+        # Sanity check
+        if offset != total_samples:
+            logger.error(f"❌ PENALTY: Tokenization incomplete: filled {offset}/{total_samples}")
+            raise ValueError("Tokenization incomplete")
+
         tokenized_data = {
-            "input_ids": torch.cat(all_input_ids, dim=0),
-            "attention_mask": torch.cat(all_attention_masks, dim=0),
-            "labels": torch.tensor(df["is_vulnerable"].astype(int).tolist(), dtype=torch.long),
+            "input_ids": input_ids_final,
+            "attention_mask": attention_final,
+            "labels": torch.tensor(all_labels, dtype=torch.long),
             "features": torch.from_numpy(features).float(),
         }
-        
-        # Clear temporary lists after concatenation
-        del all_input_ids
-        del all_attention_masks
-        gc.collect()
 
-        # Log statistics
         logger.info(f"✅ {split_name} tokenization complete:")
         logger.info(f"   Input IDs shape: {tokenized_data['input_ids'].shape}")
         logger.info(f"   Attention mask shape: {tokenized_data['attention_mask'].shape}")
         logger.info(f"   Labels shape: {tokenized_data['labels'].shape}")
         logger.info(f"   Features shape: {tokenized_data['features'].shape}")
 
-        # Memory usage info
+        # Approx memory usage
         input_ids_size_mb = tokenized_data["input_ids"].element_size() * tokenized_data["input_ids"].nelement() / (1024 * 1024)
         features_size_mb = tokenized_data["features"].element_size() * tokenized_data["features"].nelement() / (1024 * 1024)
-        logger.info(f"   Memory usage: ~{input_ids_size_mb * 2 + features_size_mb:.1f} MB")
+        logger.info(f"   Approx memory in use for tensors: ~{input_ids_size_mb + features_size_mb:.1f} MB")
 
         return tokenized_data
 
@@ -891,7 +892,7 @@ def process_and_persist_split(
 
     # Sanity check saved file
     sanity_check(out_path, split_name)
-    
+
     # Free memory after saving
     import gc
     gc.collect()
@@ -1015,7 +1016,7 @@ def main():
         logger.info(f"   Test features shape: {test_features.shape}")
         if len(feature_names) > 0:
             logger.info(f"   Sample features: {feature_names[:5]}")
-        
+
         # Store row counts before clearing DataFrames
         train_count = len(train_df)
         val_count = len(val_df)
@@ -1032,7 +1033,7 @@ def main():
             "train", train_df, train_features, tokenizer, config, scaler=None
         )
         logger.info(f"✅ Train tokenization & persist complete")
-        
+
         # Clear train data to free memory
         del train_df
         del train_features
@@ -1045,7 +1046,7 @@ def main():
             "val", val_df, val_features, tokenizer, config, scaler=scaler
         )
         logger.info(f"✅ Validation tokenization & persist complete")
-        
+
         # Clear val data to free memory
         del val_df
         del val_features
@@ -1057,7 +1058,7 @@ def main():
             "test", test_df, test_features, tokenizer, config, scaler=scaler
         )
         logger.info(f"✅ Test tokenization & persist complete")
-        
+
         # Clear test data to free memory
         del test_df
         del test_features
