@@ -2,13 +2,13 @@
 # type: ignore
 
 """
-GraphCodeBERT Tokenization Pipeline for Vulnerability Detection with Multimodal Features
+graphcodebert Tokenization Pipeline for Vulnerability Detection with Multimodal Features
 ====================================================================================
 Production-ready tokenization script with engineered numeric features support.
 
 Features:
 ✅ CSV input with code + ~107 numeric features
-✅ Tokenization with GraphCodeBERT
+✅ Tokenization with graphcodebert
 ✅ Feature extraction and normalization
 ✅ Multimodal output: input_ids + attention_mask + labels + features
 
@@ -17,11 +17,11 @@ Output:
 """
 
 import os
-import json
+import csv
 import torch
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from collections import Counter
 import logging
@@ -29,8 +29,7 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 from torch.utils.data import Dataset, DataLoader
 import multiprocessing as mp
-from functools import partial
-import hashlib
+from functools
 import random
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -46,7 +45,7 @@ class TokenizationConfig:
 
     # Model configuration
     model_name: str = "microsoft/graphcodebert-base"
-    max_seq_length: int = 256  # REDUCED from 512 to avoid OOM on Kaggle
+    max_seq_length: int = 512
     dynamic_padding: bool = True  # Enable dynamic padding per batch
 
     # Input paths (Kaggle)
@@ -161,23 +160,14 @@ class ErrorTracker:
 
         # Open, write, and close immediately for multiprocessing safety
         try:
-            # Write as CSV row
-            import csv
-            file_exists = os.path.exists(self.error_log_path)
-            with open(self.error_log_path, "a", newline="", encoding="utf-8") as f:
+            with open(self.error_log_path, "a", newline='', encoding="utf-8") as f:
                 writer = csv.writer(f)
-                if not file_exists:
-                    # Write header if file doesn't exist
-                    writer.writerow(["row_id", "split", "error_type", "error_message", "timestamp", "code_length", "label"])
-                # Write error data
                 writer.writerow([
-                    row_id,
-                    split_name,
-                    error_type,
-                    str(error_msg),
-                    str(torch.cuda.Event(enable_timing=False)) if torch.cuda.is_available() else "N/A",
-                    len(str(row_data.get("code", ""))) if row_data else "N/A",
-                    row_data.get("is_vulnerable", "N/A") if row_data else "N/A"
+                    error_entry["row_id"],
+                    error_entry["split"],
+                    error_entry["error_type"],
+                    error_entry["error_message"],
+                    error_entry["timestamp"]
                 ])
         except Exception as e:
             logger.warning(f"Failed to write error log: {e}")
@@ -226,7 +216,7 @@ def get_cache_path(split_name: str, config: TokenizationConfig) -> str:
 
 def load_from_cache(
     split_name: str, config: TokenizationConfig
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Dict[str, torch.Tensor]]:
     """Load tokenized data from cache if available"""
     if not config.use_cache or config.force_retokenize:
         return None
@@ -238,7 +228,7 @@ def load_from_cache(
             logger.info(f"📦 Loading {split_name} from cache: {cache_path}")
             cached_data = torch.load(cache_path)
             logger.info(
-                f"✅ Cache hit! Loaded metadata for {cached_data['metadata']['total_samples']} samples"
+                f"✅ Cache hit! Loaded {cached_data['input_ids'].shape[0]} samples"
             )
             return cached_data
         except Exception as e:
@@ -252,7 +242,7 @@ def load_from_cache(
 
 
 def save_to_cache(
-    tokenized_data: Dict[str, Any], split_name: str, config: TokenizationConfig
+    tokenized_data: Dict[str, torch.Tensor], split_name: str, config: TokenizationConfig
 ):
     """Save tokenized data to cache"""
     if not config.use_cache:
@@ -286,11 +276,6 @@ def load_csv(file_path: str) -> pd.DataFrame:
     """
     Load CSV file with pandas for efficient feature extraction.
 
-    Expected CSV format:
-    - code: string column with source code
-    - is_vulnerable: integer column (0/1) with vulnerability labels
-    - Additional numeric feature columns
-
     Returns: DataFrame with all columns (code, is_vulnerable, features)
     """
     try:
@@ -303,7 +288,6 @@ def load_csv(file_path: str) -> pd.DataFrame:
 
         logger.info(f"✅ Loaded {len(df)} samples from {file_path}")
         logger.info(f"   Columns: {len(df.columns)} total")
-        logger.info(f"   Column names: {list(df.columns)}")
 
         return df
 
@@ -596,8 +580,21 @@ def tokenize_dataset_batch(
     tokenizer,
     config: TokenizationConfig,
     split_name: str,
-) -> Dict[str, Any]:
-    logger.info(f"🔄 Memory-mapped tokenizing {split_name} split ({len(df)} samples)...")
+) -> Dict[str, torch.Tensor]:
+    """
+    Tokenize dataset with FAST batch processing and include numeric features.
+
+    Args:
+        df: DataFrame with code and is_vulnerable columns
+        features: NumPy array of numeric features [num_samples, num_features]
+        tokenizer: HuggingFace tokenizer
+        config: Configuration object
+        split_name: Name of the split
+
+    Returns:
+        Dict with input_ids, attention_mask, labels, features tensors
+    """
+    logger.info(f"🔄 Fast batch tokenizing {split_name} split ({len(df)} samples)...")
 
     # Shuffle training data for better generalization
     if split_name == "train" and config.shuffle_train:
@@ -611,126 +608,59 @@ def tokenize_dataset_batch(
     all_code = df["code"].astype(str).tolist()
     all_labels = df["is_vulnerable"].astype(int).tolist()
 
-    # Setup memory-mapped files
-    os.makedirs(config.output_base, exist_ok=True)
-    split_dir = os.path.join(config.output_base, f"{split_name}_memmap")
-    os.makedirs(split_dir, exist_ok=True)
+    # CHUNKED BATCH TOKENIZATION - process in chunks to avoid OOM
+    chunk_size = 10000  # Process 10k samples at a time
+    num_chunks = (len(all_code) + chunk_size - 1) // chunk_size
 
-    total_samples = len(all_code)
-    max_len = config.max_seq_length
-    mmap_dtype = np.int32  # saves 50% memory vs int64
+    logger.info(f"⚡ Batch tokenizing in {num_chunks} chunks of {chunk_size} samples...")
 
-    input_ids_path = os.path.join(split_dir, "input_ids.dat")
-    attention_path = os.path.join(split_dir, "attention_mask.dat")
-    labels_path = os.path.join(split_dir, "labels.npy")
-    features_path = os.path.join(split_dir, "features.npy")
-    meta_path = os.path.join(split_dir, "metadata.json")
-
-    logger.info(f"💾 Creating memory-mapped files in {split_dir}")
-
-    # Create memory-mapped arrays
-    input_ids_mmap = np.memmap(input_ids_path, dtype=mmap_dtype, mode="w+", shape=(total_samples, max_len))
-    attention_mmap = np.memmap(attention_path, dtype=mmap_dtype, mode="w+", shape=(total_samples, max_len))
-    labels_array = np.empty(total_samples, dtype=np.int64)
-
-    # Tokenize in small chunks and write directly to disk
-    chunk_size = 128  # Very small chunks for Kaggle safety (reduced from 256)
-
-    logger.info(f"⚡ Streaming tokenization: chunk_size={chunk_size}, writing to disk...")
+    all_input_ids = []
+    all_attention_masks = []
 
     try:
-        for start in tqdm(range(0, total_samples, chunk_size), desc=f"Tokenizing {split_name}"):
-            end = min(start + chunk_size, total_samples)
-            batch_texts = all_code[start:end]
+        padding_strategy = "max_length"  # Always use max_length for consistent shapes
+
+        for i in tqdm(range(0, len(all_code), chunk_size), desc=f"Tokenizing {split_name}"):
+            chunk_code = all_code[i:i + chunk_size]
 
             # Tokenize chunk
             encoded = tokenizer(
-                batch_texts,
-                max_length=max_len,
-                padding="max_length",
+                chunk_code,
+                max_length=config.max_seq_length,
+                padding=padding_strategy,
                 truncation=config.truncation,
-                return_tensors="np",  # Return numpy arrays
+                return_tensors="pt",
                 return_attention_mask=config.return_attention_mask,
             )
 
-            # Write directly to memory-mapped files
-            input_ids_mmap[start:end] = encoded["input_ids"].astype(np.int32)
-            attention_mmap[start:end] = encoded["attention_mask"].astype(np.int32)
-            labels_array[start:end] = all_labels[start:end]
+            all_input_ids.append(encoded["input_ids"])
+            all_attention_masks.append(encoded["attention_mask"])
 
-            # Aggressive cleanup
-            del encoded, batch_texts
-            import gc
-            gc.collect()
-
-        # Flush memory-mapped arrays to disk
-        logger.info(f"💾 Flushing data to disk...")
-        input_ids_mmap.flush()
-        attention_mmap.flush()
-
-        # Save labels and features as regular numpy files
-        np.save(labels_path, labels_array)
-        np.save(features_path, features.astype(np.float32))
-
-        # Close memory-mapped arrays
-        del input_ids_mmap, attention_mmap, labels_array
-        gc.collect()
-
-        # Save metadata
-        metadata = {
-            "split": split_name,
-            "total_samples": total_samples,
-            "max_seq_length": max_len,
-            "input_ids_path": input_ids_path,
-            "attention_path": attention_path,
-            "labels_path": labels_path,
-            "features_path": features_path,
-            "dtype": str(mmap_dtype),
-        }
-        with open(meta_path, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        logger.info(f"✅ {split_name} tokenized safely to disk at {split_dir}")
-        logger.info(f"   Memory-mapped tokenization complete")
-        logger.info(f"   Metadata saved to {meta_path}")
-
-        # Skip loading full tensors into RAM - keep everything on disk
-        logger.info(f"📦 Skipping full tensor loading - keeping data on disk...")
-
-        # Return metadata dict instead of loading full tensors into RAM
+        # Concatenate all chunks
+        logger.info(f"🔗 Concatenating {len(all_input_ids)} chunks...")
         tokenized_data = {
-            "metadata": metadata,
-            "input_ids_path": input_ids_path,
-            "attention_mask_path": attention_path,
-            "labels_path": labels_path,
-            "features_path": features_path,
+            "input_ids": torch.cat(all_input_ids, dim=0),
+            "attention_mask": torch.cat(all_attention_masks, dim=0),
+            "labels": torch.tensor(all_labels, dtype=torch.long),
+            "features": torch.from_numpy(features).float(),
         }
 
-        # Log statistics from metadata
+        # Log statistics
         logger.info(f"✅ {split_name} tokenization complete:")
-        logger.info(f"   Total samples: {metadata['total_samples']}")
-        logger.info(f"   Max sequence length: {metadata['max_seq_length']}")
-        logger.info(f"   Input IDs path: {input_ids_path}")
-        logger.info(f"   Attention mask path: {attention_path}")
-        logger.info(f"   Labels path: {labels_path}")
-        logger.info(f"   Features path: {features_path}")
+        logger.info(f"   Input IDs shape: {tokenized_data['input_ids'].shape}")
+        logger.info(f"   Attention mask shape: {tokenized_data['attention_mask'].shape}")
+        logger.info(f"   Labels shape: {tokenized_data['labels'].shape}")
+        logger.info(f"   Features shape: {tokenized_data['features'].shape}")
 
-        # Approx file sizes
-        input_ids_size_mb = os.path.getsize(input_ids_path) / (1024 * 1024)
-        features_size_mb = os.path.getsize(features_path) / (1024 * 1024)
-        logger.info(f"   Disk usage: ~{input_ids_size_mb + features_size_mb:.1f} MB")
+        # Memory usage info
+        input_ids_size_mb = tokenized_data["input_ids"].element_size() * tokenized_data["input_ids"].nelement() / (1024 * 1024)
+        features_size_mb = tokenized_data["features"].element_size() * tokenized_data["features"].nelement() / (1024 * 1024)
+        logger.info(f"   Memory usage: ~{input_ids_size_mb * 2 + features_size_mb:.1f} MB")
 
         return tokenized_data
 
     except Exception as e:
         logger.error(f"❌ PENALTY: Tokenization failed for {split_name}: {e}")
-        # Cleanup partial files
-        for path in [input_ids_path, attention_path, labels_path, features_path, meta_path]:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                except:
-                    pass
         raise
 
 
@@ -745,6 +675,15 @@ def validate_tokenized_data(
     expected_samples: int,
     config: TokenizationConfig,
 ) -> None:
+    """
+    Validate tokenized data shapes and content (including features).
+
+    Args:
+        tokenized_data: Dict with input_ids, attention_mask, labels, features
+        split_name: Name of the split
+        expected_samples: Expected number of samples
+        config: Configuration object
+    """
     logger.info(f"🔍 Validating {split_name} tokenized data...")
 
     # Check keys
@@ -881,7 +820,27 @@ def process_and_persist_split(
     tokenizer,
     config: TokenizationConfig,
     scaler: Optional[StandardScaler] = None,
-) -> Tuple[Dict[str, Any], StandardScaler]:
+) -> Tuple[Dict[str, torch.Tensor], StandardScaler]:
+    """
+    End-to-end handling for a single split with multimodal features:
+      - tokenizes code (chunked)
+      - includes numeric features
+      - validates shapes & labels
+      - saves to final output
+      - performs sanity check
+
+    Args:
+        split_name: Name of the split
+        df: DataFrame with code and labels
+        features: NumPy array of numeric features
+        tokenizer: HuggingFace tokenizer
+        config: Configuration object
+        scaler: Pre-fitted scaler (for val/test)
+
+    Returns:
+        tokenized_data: Dict with all tensors
+        scaler: Fitted scaler (for train) or input scaler (for val/test)
+    """
     logger.info(f"\n[PROCESS] Starting processing for split: {split_name}")
 
     # Normalize features
@@ -896,33 +855,43 @@ def process_and_persist_split(
         df, features, tokenizer, config, split_name
     )
 
-    # Save metadata to cache
-    save_to_cache(tokenized, split_name, config)
+    # Validate tokenized data
+    validate_tokenized_data(
+        tokenized, split_name, tokenized["input_ids"].shape[0], config
+    )
 
-    # Free memory after saving
-    import gc
-    gc.collect()
+    # Persist final dataset to configured output path
+    output_map = {
+        "train": config.train_output,
+        "val": config.val_output,
+        "test": config.test_output,
+    }
+    out_path = output_map.get(split_name)
+    if out_path is None:
+        # Fallback: create file under output_base
+        out_path = os.path.join(config.output_base, f"{split_name}_tokenized.pt")
+
+    save_tokenized_dataset(tokenized, out_path, split_name)
+
+    # Sanity check saved file
+    sanity_check(out_path, split_name)
 
     return tokenized, scaler
 
 
 def assert_outputs_exist(config: TokenizationConfig):
     """
-    Assert that all final tokenized output cache files exist.
+    Assert that all final tokenized output files exist.
 
     Rewards: ✅ All outputs present
     Penalties: ❌ Missing outputs
     """
-    expected = [
-        get_cache_path("train", config),
-        get_cache_path("val", config),
-        get_cache_path("test", config),
-    ]
+    expected = [config.train_output, config.val_output, config.test_output]
     missing = [p for p in expected if not os.path.exists(p)]
     if missing:
         logger.error(f"❌ PENALTY: Missing final outputs: {missing}")
         raise FileNotFoundError(f"Missing outputs: {missing}")
-    logger.info("✅ All final tokenized output cache files are present.")
+    logger.info("✅ All final tokenized output files are present.")
 
 
 # ============================================================================
@@ -933,12 +902,11 @@ def assert_outputs_exist(config: TokenizationConfig):
 def main():
     """
     Main tokenization pipeline with multimodal features (code + numeric features).
-    Expects CSV input files with columns: code, is_vulnerable, [feature_columns...]
     """
     config = TokenizationConfig()
 
     logger.info("=" * 80)
-    logger.info("🚀 GraphCodeBERT Multimodal Tokenization Pipeline")
+    logger.info("🚀 graphcodebert Multimodal Tokenization Pipeline")
     logger.info("=" * 80)
     logger.info(f"📋 Configuration:")
     logger.info(f"   Model: {config.model_name}")
@@ -966,13 +934,8 @@ def main():
         # STEP 3: Load Tokenizer
         # ====================================================================
         logger.info("\n[STEP 3/6] Loading tokenizer...")
-
-        # 🔒 Fully disable parallel threads in tokenizer & BLAS
+        # Disable chat template fetching to avoid 404 errors
         os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
-        os.environ["OMP_NUM_THREADS"] = "1"
-        os.environ["MKL_NUM_THREADS"] = "1"
-        os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
         try:
             tokenizer = AutoTokenizer.from_pretrained(
@@ -1033,11 +996,6 @@ def main():
         if len(feature_names) > 0:
             logger.info(f"   Sample features: {feature_names[:5]}")
 
-        # Store row counts before clearing DataFrames
-        train_count = len(train_df)
-        val_count = len(val_df)
-        test_count = len(test_df)
-
         # ====================================================================
         # STEP 6: Tokenize and Persist All Splits
         # ====================================================================
@@ -1050,12 +1008,6 @@ def main():
         )
         logger.info(f"✅ Train tokenization & persist complete")
 
-        # Clear train data to free memory
-        del train_df
-        del train_features
-        import gc
-        gc.collect()
-
         # Process val (use fitted scaler)
         logger.info("\n--- Processing VAL split ---")
         val_tokenized, _ = process_and_persist_split(
@@ -1063,22 +1015,12 @@ def main():
         )
         logger.info(f"✅ Validation tokenization & persist complete")
 
-        # Clear val data to free memory
-        del val_df
-        del val_features
-        gc.collect()
-
         # Process test (use fitted scaler)
         logger.info("\n--- Processing TEST split ---")
         test_tokenized, _ = process_and_persist_split(
             "test", test_df, test_features, tokenizer, config, scaler=scaler
         )
         logger.info(f"✅ Test tokenization & persist complete")
-
-        # Clear test data to free memory
-        del test_df
-        del test_features
-        gc.collect()
 
         # ====================================================================
         # STEP 7: Final Verification
@@ -1094,17 +1036,15 @@ def main():
         logger.info("🎉 PIPELINE COMPLETED SUCCESSFULLY!")
         logger.info("=" * 80)
         logger.info(f"\n📁 Output Directory: {config.output_base}")
-        logger.info(f"   ├── train cache: {get_cache_path('train', config)} ({train_count} samples)")
-        logger.info(f"   ├── val cache: {get_cache_path('val', config)} ({val_count} samples)")
-        logger.info(f"   └── test cache: {get_cache_path('test', config)} ({test_count} samples)")
-        logger.info(f"\n📊 Output Structure (per cache file):")
-        logger.info(f"   ├── metadata: dataset info and paths")
-        logger.info(f"   ├── input_ids_path: path to memory-mapped input IDs")
-        logger.info(f"   ├── attention_mask_path: path to memory-mapped attention masks")
-        logger.info(f"   ├── labels_path: path to labels array")
-        logger.info(f"   └── features_path: path to features array")
-        logger.info(f"\n✅ Ready for multimodal fine-tuning with memmap-based data loading!")
-        logger.info(f"   Input format: CSV files with code + numeric features")
+        logger.info(f"   ├── train_tokenized_graphcodebert.pt ({len(train_df)} samples)")
+        logger.info(f"   ├── val_tokenized_graphcodebert.pt ({len(val_df)} samples)")
+        logger.info(f"   └── test_tokenized_graphcodebert.pt ({len(test_df)} samples)")
+        logger.info(f"\n📊 Output Structure (per .pt file):")
+        logger.info(f"   ├── input_ids: {train_tokenized['input_ids'].shape}")
+        logger.info(f"   ├── attention_mask: {train_tokenized['attention_mask'].shape}")
+        logger.info(f"   ├── labels: {train_tokenized['labels'].shape}")
+        logger.info(f"   └── features: {train_tokenized['features'].shape}")
+        logger.info(f"\n✅ Ready for multimodal fine-tuning with use_features=True!")
 
     except Exception as e:
         logger.error("\n" + "=" * 80)
@@ -1120,143 +1060,13 @@ def main():
 
 
 if __name__ == "__main__":
-    # Disable multiprocessing completely to avoid semaphore leaks and memory issues
-    # Set single-threaded mode for tokenization
-    import os
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+    # Set multiprocessing start method for compatibility
+    try:
+        if mp.get_start_method(allow_none=True) != "spawn":
+            mp.set_start_method("spawn", force=True)
+    except RuntimeError:
+        # Already set, ignore
+        pass
 
-    import gc
-    from transformers import AutoTokenizer
-
-    config = TokenizationConfig()
-
-    # 🔒 Fully disable parallel threads in tokenizer & BLAS
-    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-
-    print("🚀 Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(
-        config.model_name,
-        trust_remote_code=False,
-        use_fast=True,
-        chat_template=None
-    )
-    print("✅ Tokenizer loaded successfully")
-
-    # Process ONE split at a time to avoid memory spikes
-    for split_name, file_path in [
-        ("train", config.train_path),
-        ("val", config.val_path),
-        ("test", config.test_path)
-    ]:
-        print(f"\n🚀 Processing {split_name} split...")
-
-        # Load and validate data
-        df = load_csv(file_path)
-        validate_data(df, split_name, config)
-
-        # Extract features
-        features, feature_names = extract_numeric_features(df, config)
-        print(f"📊 Extracted {len(feature_names)} features for {len(df)} samples")
-
-        # Process split (no scaler needed for individual processing)
-        scaler = None  # Will fit scaler on train if needed
-        if split_name == "train":
-            _, scaler = process_and_persist_split(split_name, df, features, tokenizer, config, scaler=None)
-        else:
-            _, _ = process_and_persist_split(split_name, df, features, tokenizer, config, scaler=scaler)
-
-        # Clean up memory immediately
-        del df, features
-        gc.collect()
-
-        print(f"✅ Finished {split_name} split!\n")
-
-    # Final verification
-    print("🔍 Verifying all output files exist...")
-    assert_outputs_exist(config)
-    print("✅ All tokenized datasets ready!")
-
-    print("\n" + "=" * 80)
-    print("🎉 ALL SPLITS PROCESSED SUCCESSFULLY!")
-    print("=" * 80)
-    print(f"📁 Output Directory: {config.output_base}")
-    print("   ├── train_memmap/ (input_ids.dat, attention_mask.dat, labels.npy, features.npy, metadata.json)")
-    print("   ├── val_memmap/ (input_ids.dat, attention_mask.dat, labels.npy, features.npy, metadata.json)")
-    print("   └── test_memmap/ (input_ids.dat, attention_mask.dat, labels.npy, features.npy, metadata.json)")
-def load_split_metadata(split_name: str, config: TokenizationConfig):
-    cache_path = get_cache_path(split_name, config)
-    if not os.path.exists(cache_path):
-        raise FileNotFoundError(f"Cache not found: {cache_path}")
-
-    metadata = torch.load(cache_path)
-    return metadata
-
-
-# ============================================================================
-# TRAINING UTILITIES
-# ============================================================================
-
-
-def memmap_loader(meta, batch_size=64):
-    import numpy as np
-    import torch
-
-    # Load memory-mapped arrays (read-only)
-    input_ids = np.memmap(
-        meta["input_ids_path"],
-        dtype=np.int32,
-        mode="r",
-        shape=(meta["total_samples"], meta["max_seq_length"])
-    )
-    attention_mask = np.memmap(
-        meta["attention_mask_path"],
-        dtype=np.int32,
-        mode="r",
-        shape=(meta["total_samples"], meta["max_seq_length"])
-    )
-    labels = np.load(meta["labels_path"], mmap_mode="r")
-    features = np.load(meta["features_path"], mmap_mode="r")
-
-    # Yield batches
-    for i in range(0, meta["total_samples"], batch_size):
-        j = min(i + batch_size, meta["total_samples"])
-
-        yield {
-            "input_ids": torch.from_numpy(input_ids[i:j].astype(np.int64)),
-            "attention_mask": torch.from_numpy(attention_mask[i:j].astype(np.int64)),
-            "labels": torch.from_numpy(labels[i:j].astype(np.int64)),
-            "features": torch.from_numpy(features[i:j].astype(np.float32)),
-        }
-
-
-# ============================================================================
-# USAGE EXAMPLE FOR TRAINING
-# ============================================================================
-
-"""
-Example: How to use the tokenized data for training
-
-CSV Input Format Expected:
-- train.csv, val.csv, test.csv with columns: code, is_vulnerable, [feature_cols...]
-
-from tokenize_graphcodebert import load_split_metadata, memmap_loader, TokenizationConfig
-
-config = TokenizationConfig()
-train_meta = load_split_metadata("train", config)
-val_meta = load_split_metadata("val", config)
-
-# Create data loaders
-train_loader = memmap_loader(train_meta, batch_size=32)
-val_loader = memmap_loader(val_meta, batch_size=32)
-
-# Use in training loop
-for batch in train_loader:
-    # batch contains: input_ids, attention_mask, labels, features
-    outputs = model(**batch)
-    loss = outputs.loss
-    # ... training code ...
-"""
+    main()
 
