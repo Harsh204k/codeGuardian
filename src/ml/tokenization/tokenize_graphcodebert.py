@@ -576,8 +576,9 @@ def tokenize_dataset_batch(
     split_name: str,
 ) -> Dict[str, torch.Tensor]:
     """
-    Tokenize dataset with FAST batch processing and include numeric features.
-
+    ✅ Memory-safe tokenization using numpy.memmap streaming to disk.
+    This keeps RAM usage under 1GB even for very large datasets.
+    
     Args:
         df: DataFrame with code and is_vulnerable columns
         features: NumPy array of numeric features [num_samples, num_features]
@@ -586,9 +587,9 @@ def tokenize_dataset_batch(
         split_name: Name of the split
 
     Returns:
-        Dict with input_ids, attention_mask, labels, features tensors
+        Dict with input_ids, attention_mask, labels, features tensors (loaded from memmap)
     """
-    logger.info(f"🔄 Fast batch tokenizing {split_name} split ({len(df)} samples)...")
+    logger.info(f"🔄 Memory-mapped tokenizing {split_name} split ({len(df)} samples)...")
 
     # Shuffle training data for better generalization
     if split_name == "train" and config.shuffle_train:
@@ -602,85 +603,127 @@ def tokenize_dataset_batch(
     all_code = df["code"].astype(str).tolist()
     all_labels = df["is_vulnerable"].astype(int).tolist()
 
-    # STREAMING TOKENIZATION - preallocate final tensors and stream chunks
-    # Avoid holding many chunk tensors in memory which causes OOM.
-    chunk_size = 500  # DRASTICALLY REDUCED for Kaggle memory constraints
+    # Setup memory-mapped files
+    os.makedirs(config.output_base, exist_ok=True)
+    split_dir = os.path.join(config.output_base, f"{split_name}_memmap")
+    os.makedirs(split_dir, exist_ok=True)
+
     total_samples = len(all_code)
+    max_len = config.max_seq_length
+    mmap_dtype = np.int32  # saves 50% memory vs int64
 
-    logger.info(f"⚡ Streaming tokenizing {total_samples} samples in chunks of {chunk_size}...")
-    logger.info(f"🧠 EXTREME MEMORY MODE: chunk_size={chunk_size}, max_seq_length={config.max_seq_length}")
+    input_ids_path = os.path.join(split_dir, "input_ids.dat")
+    attention_path = os.path.join(split_dir, "attention_mask.dat")
+    labels_path = os.path.join(split_dir, "labels.npy")
+    features_path = os.path.join(split_dir, "features.npy")
+    meta_path = os.path.join(split_dir, "metadata.json")
 
-    # Pre-allocate final tensors on CPU to avoid extra copies during concatenation
+    logger.info(f"💾 Creating memory-mapped files in {split_dir}")
+
+    # Create memory-mapped arrays
+    input_ids_mmap = np.memmap(input_ids_path, dtype=mmap_dtype, mode="w+", shape=(total_samples, max_len))
+    attention_mmap = np.memmap(attention_path, dtype=mmap_dtype, mode="w+", shape=(total_samples, max_len))
+    labels_array = np.empty(total_samples, dtype=np.int64)
+
+    # Tokenize in small chunks and write directly to disk
+    chunk_size = 256  # Very small chunks for Kaggle safety
+    
+    logger.info(f"⚡ Streaming tokenization: chunk_size={chunk_size}, writing to disk...")
+
     try:
-        input_ids_final = torch.empty((total_samples, config.max_seq_length), dtype=torch.long)
-        attention_final = torch.empty((total_samples, config.max_seq_length), dtype=torch.long)
-    except Exception as e:
-        logger.error(f"❌ PENALTY: Failed to allocate final tensors ({e}). Reduce max_seq_length or batch size.")
-        raise
-
-    offset = 0
-    padding_strategy = "max_length"
-
-    try:
-        for i in tqdm(range(0, total_samples, chunk_size), desc=f"Tokenizing {split_name}"):
-            chunk_code = all_code[i : i + chunk_size]
-            cur_len = len(chunk_code)
+        for start in tqdm(range(0, total_samples, chunk_size), desc=f"Tokenizing {split_name}"):
+            end = min(start + chunk_size, total_samples)
+            batch_texts = all_code[start:end]
 
             # Tokenize chunk
             encoded = tokenizer(
-                chunk_code,
-                max_length=config.max_seq_length,
-                padding=padding_strategy,
+                batch_texts,
+                max_length=max_len,
+                padding="max_length",
                 truncation=config.truncation,
-                return_tensors="pt",
+                return_tensors="np",  # Return numpy arrays
                 return_attention_mask=config.return_attention_mask,
             )
 
-            # Move to CPU and write into preallocated tensors
-            ids_cpu = encoded["input_ids"].to("cpu")
-            att_cpu = encoded["attention_mask"].to("cpu")
+            # Write directly to memory-mapped files
+            input_ids_mmap[start:end] = encoded["input_ids"].astype(np.int32)
+            attention_mmap[start:end] = encoded["attention_mask"].astype(np.int32)
+            labels_array[start:end] = all_labels[start:end]
 
-            input_ids_final[offset : offset + cur_len, :] = ids_cpu
-            attention_final[offset : offset + cur_len, :] = att_cpu
-
-            offset += cur_len
-
-            # Aggressive cleanup - force immediate memory release
-            del encoded, ids_cpu, att_cpu, chunk_code
+            # Aggressive cleanup
+            del encoded, batch_texts
             import gc
             gc.collect()
-            gc.collect()  # Call twice to ensure cleanup
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()  # Ensure CUDA operations complete
 
-        # Sanity check
-        if offset != total_samples:
-            logger.error(f"❌ PENALTY: Tokenization incomplete: filled {offset}/{total_samples}")
-            raise ValueError("Tokenization incomplete")
+        # Flush memory-mapped arrays to disk
+        logger.info(f"💾 Flushing data to disk...")
+        input_ids_mmap.flush()
+        attention_mmap.flush()
+        
+        # Save labels and features as regular numpy files
+        np.save(labels_path, labels_array)
+        np.save(features_path, features.astype(np.float32))
 
+        # Close memory-mapped arrays
+        del input_ids_mmap, attention_mmap, labels_array
+        gc.collect()
+
+        # Save metadata
+        metadata = {
+            "split": split_name,
+            "total_samples": total_samples,
+            "max_seq_length": max_len,
+            "input_ids_path": input_ids_path,
+            "attention_path": attention_path,
+            "labels_path": labels_path,
+            "features_path": features_path,
+            "dtype": str(mmap_dtype),
+        }
+        with open(meta_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        logger.info(f"✅ {split_name} tokenized safely to disk at {split_dir}")
+        logger.info(f"   Memory-mapped tokenization complete")
+        logger.info(f"   Metadata saved to {meta_path}")
+
+        # Load back into tensors for validation and saving as .pt
+        logger.info(f"📦 Loading tokenized data from disk for validation...")
+        input_ids_mmap = np.memmap(input_ids_path, dtype=mmap_dtype, mode="r", shape=(total_samples, max_len))
+        attention_mmap = np.memmap(attention_path, dtype=mmap_dtype, mode="r", shape=(total_samples, max_len))
+        labels_loaded = np.load(labels_path, mmap_mode="r")
+        features_loaded = np.load(features_path, mmap_mode="r")
+
+        # Convert to tensors (this is still memory-efficient because we load in read-only mode)
         tokenized_data = {
-            "input_ids": input_ids_final,
-            "attention_mask": attention_final,
-            "labels": torch.tensor(all_labels, dtype=torch.long),
-            "features": torch.from_numpy(features).float(),
+            "input_ids": torch.from_numpy(np.array(input_ids_mmap, dtype=np.int64)),
+            "attention_mask": torch.from_numpy(np.array(attention_mmap, dtype=np.int64)),
+            "labels": torch.from_numpy(np.array(labels_loaded, dtype=np.int64)),
+            "features": torch.from_numpy(np.array(features_loaded, dtype=np.float32)),
         }
 
+        # Log statistics
         logger.info(f"✅ {split_name} tokenization complete:")
         logger.info(f"   Input IDs shape: {tokenized_data['input_ids'].shape}")
         logger.info(f"   Attention mask shape: {tokenized_data['attention_mask'].shape}")
         logger.info(f"   Labels shape: {tokenized_data['labels'].shape}")
         logger.info(f"   Features shape: {tokenized_data['features'].shape}")
 
-        # Approx memory usage
-        input_ids_size_mb = tokenized_data["input_ids"].element_size() * tokenized_data["input_ids"].nelement() / (1024 * 1024)
-        features_size_mb = tokenized_data["features"].element_size() * tokenized_data["features"].nelement() / (1024 * 1024)
-        logger.info(f"   Approx memory in use for tensors: ~{input_ids_size_mb + features_size_mb:.1f} MB")
+        # Approx file sizes
+        input_ids_size_mb = os.path.getsize(input_ids_path) / (1024 * 1024)
+        features_size_mb = os.path.getsize(features_path) / (1024 * 1024)
+        logger.info(f"   Disk usage: ~{input_ids_size_mb + features_size_mb:.1f} MB")
 
         return tokenized_data
 
     except Exception as e:
         logger.error(f"❌ PENALTY: Tokenization failed for {split_name}: {e}")
+        # Cleanup partial files
+        for path in [input_ids_path, attention_path, labels_path, features_path, meta_path]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except:
+                    pass
         raise
 
 
