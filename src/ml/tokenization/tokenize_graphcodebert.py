@@ -21,7 +21,7 @@ import json
 import torch
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 from collections import Counter
 import logging
@@ -222,7 +222,7 @@ def load_from_cache(
             logger.info(f"📦 Loading {split_name} from cache: {cache_path}")
             cached_data = torch.load(cache_path)
             logger.info(
-                f"✅ Cache hit! Loaded {cached_data['input_ids'].shape[0]} samples"
+                f"✅ Cache hit! Loaded metadata for {cached_data['metadata']['total_samples']} samples"
             )
             return cached_data
         except Exception as e:
