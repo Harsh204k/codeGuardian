@@ -7,7 +7,7 @@ GraphCodeBERT Tokenization Pipeline for Vulnerability Detection with Multimodal 
 Production-ready tokenization script with engineered numeric features support.
 
 Features:
-✅ JSONL input with code + ~107 numeric features
+✅ CSV input with code + ~107 numeric features
 ✅ Tokenization with GraphCodeBERT
 ✅ Feature extraction and normalization
 ✅ Multimodal output: input_ids + attention_mask + labels + features
@@ -53,9 +53,9 @@ class TokenizationConfig:
     input_base: str = (
         "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/random_splitted"
     )
-    train_path: str = f"{input_base}/train.jsonl"
-    val_path: str = f"{input_base}/val.jsonl"
-    test_path: str = f"{input_base}/test.jsonl"
+    train_path: str = f"{input_base}/train.csv"
+    val_path: str = f"{input_base}/val.csv"
+    test_path: str = f"{input_base}/test.csv"
 
     # Output paths
     output_base: str = "/kaggle/working/datasets/tokenized/graphcodebert"
@@ -63,7 +63,7 @@ class TokenizationConfig:
     train_output: str = f"{output_base}/train_tokenized_graphcodebert.pt"
     val_output: str = f"{output_base}/val_tokenized_graphcodebert.pt"
     test_output: str = f"{output_base}/test_tokenized_graphcodebert.pt"
-    error_log: str = f"{output_base}/tokenization_errors.jsonl"
+    error_log: str = f"{output_base}/tokenization_errors.csv"
 
     # Processing configuration
     batch_size: int = 128  # Increased for faster processing (was 32)
@@ -161,8 +161,24 @@ class ErrorTracker:
 
         # Open, write, and close immediately for multiprocessing safety
         try:
-            with open(self.error_log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(error_entry) + "\n")
+            # Write as CSV row
+            import csv
+            file_exists = os.path.exists(self.error_log_path)
+            with open(self.error_log_path, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    # Write header if file doesn't exist
+                    writer.writerow(["row_id", "split", "error_type", "error_message", "timestamp", "code_length", "label"])
+                # Write error data
+                writer.writerow([
+                    row_id,
+                    split_name,
+                    error_type,
+                    str(error_msg),
+                    str(torch.cuda.Event(enable_timing=False)) if torch.cuda.is_available() else "N/A",
+                    len(str(row_data.get("code", ""))) if row_data else "N/A",
+                    row_data.get("is_vulnerable", "N/A") if row_data else "N/A"
+                ])
         except Exception as e:
             logger.warning(f"Failed to write error log: {e}")
 
@@ -266,15 +282,20 @@ def set_seed(seed: int):
     logger.info(f"🎲 Random seed set to: {seed}")
 
 
-def load_jsonl(file_path: str) -> pd.DataFrame:
+def load_csv(file_path: str) -> pd.DataFrame:
     """
-    Load JSONL file with pandas for efficient feature extraction.
+    Load CSV file with pandas for efficient feature extraction.
+
+    Expected CSV format:
+    - code: string column with source code
+    - is_vulnerable: integer column (0/1) with vulnerability labels
+    - Additional numeric feature columns
 
     Returns: DataFrame with all columns (code, is_vulnerable, features)
     """
     try:
-        logger.info(f"📂 Loading JSONL file: {file_path}")
-        df = pd.read_json(file_path, lines=True)
+        logger.info(f"📂 Loading CSV file: {file_path}")
+        df = pd.read_csv(file_path)
 
         # Fill NaN values in numeric columns with 0.0
         numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -282,6 +303,7 @@ def load_jsonl(file_path: str) -> pd.DataFrame:
 
         logger.info(f"✅ Loaded {len(df)} samples from {file_path}")
         logger.info(f"   Columns: {len(df.columns)} total")
+        logger.info(f"   Column names: {list(df.columns)}")
 
         return df
 
@@ -575,20 +597,6 @@ def tokenize_dataset_batch(
     config: TokenizationConfig,
     split_name: str,
 ) -> Dict[str, Any]:
-    """
-    ✅ Memory-safe tokenization using numpy.memmap streaming to disk.
-    This keeps RAM usage under 1GB even for very large datasets.
-
-    Args:
-        df: DataFrame with code and is_vulnerable columns
-        features: NumPy array of numeric features [num_samples, num_features]
-        tokenizer: HuggingFace tokenizer
-        config: Configuration object
-        split_name: Name of the split
-
-    Returns:
-        Dict with input_ids, attention_mask, labels, features tensors (loaded from memmap)
-    """
     logger.info(f"🔄 Memory-mapped tokenizing {split_name} split ({len(df)} samples)...")
 
     # Shuffle training data for better generalization
@@ -737,15 +745,6 @@ def validate_tokenized_data(
     expected_samples: int,
     config: TokenizationConfig,
 ) -> None:
-    """
-    Validate tokenized data shapes and content (including features).
-
-    Args:
-        tokenized_data: Dict with input_ids, attention_mask, labels, features
-        split_name: Name of the split
-        expected_samples: Expected number of samples
-        config: Configuration object
-    """
     logger.info(f"🔍 Validating {split_name} tokenized data...")
 
     # Check keys
@@ -883,26 +882,6 @@ def process_and_persist_split(
     config: TokenizationConfig,
     scaler: Optional[StandardScaler] = None,
 ) -> Tuple[Dict[str, Any], StandardScaler]:
-    """
-    End-to-end handling for a single split with multimodal features:
-      - tokenizes code (chunked)
-      - includes numeric features
-      - validates shapes & labels
-      - saves to final output
-      - performs sanity check
-
-    Args:
-        split_name: Name of the split
-        df: DataFrame with code and labels
-        features: NumPy array of numeric features
-        tokenizer: HuggingFace tokenizer
-        config: Configuration object
-        scaler: Pre-fitted scaler (for val/test)
-
-    Returns:
-        tokenized_data: Dict with all tensors
-        scaler: Fitted scaler (for train) or input scaler (for val/test)
-    """
     logger.info(f"\n[PROCESS] Starting processing for split: {split_name}")
 
     # Normalize features
@@ -954,6 +933,7 @@ def assert_outputs_exist(config: TokenizationConfig):
 def main():
     """
     Main tokenization pipeline with multimodal features (code + numeric features).
+    Expects CSV input files with columns: code, is_vulnerable, [feature_columns...]
     """
     config = TokenizationConfig()
 
@@ -1026,9 +1006,9 @@ def main():
         # STEP 4: Load and Validate Data
         # ====================================================================
         logger.info("\n[STEP 4/6] Loading datasets...")
-        train_df = load_jsonl(config.train_path)
-        val_df = load_jsonl(config.val_path)
-        test_df = load_jsonl(config.test_path)
+        train_df = load_csv(config.train_path)
+        val_df = load_csv(config.val_path)
+        test_df = load_csv(config.test_path)
         logger.info(f"✅ All datasets loaded successfully")
 
         logger.info("\n[STEP 4/6] Validating datasets...")
@@ -1124,6 +1104,7 @@ def main():
         logger.info(f"   ├── labels_path: path to labels array")
         logger.info(f"   └── features_path: path to features array")
         logger.info(f"\n✅ Ready for multimodal fine-tuning with memmap-based data loading!")
+        logger.info(f"   Input format: CSV files with code + numeric features")
 
     except Exception as e:
         logger.error("\n" + "=" * 80)
@@ -1132,7 +1113,7 @@ def main():
         logger.error(f"Error: {type(e).__name__}: {e}")
         logger.error("\n💡 Troubleshooting:")
         logger.error("   1. Check input paths exist")
-        logger.error("   2. Verify JSONL format is valid")
+        logger.error("   2. Verify CSV format is valid (code, is_vulnerable, feature columns)")
         logger.error("   3. Ensure sufficient memory")
         logger.error("   4. Check log file for details")
         raise
@@ -1173,7 +1154,7 @@ if __name__ == "__main__":
         print(f"\n🚀 Processing {split_name} split...")
 
         # Load and validate data
-        df = load_jsonl(file_path)
+        df = load_csv(file_path)
         validate_data(df, split_name, config)
 
         # Extract features
@@ -1206,16 +1187,6 @@ if __name__ == "__main__":
     print("   ├── val_memmap/ (input_ids.dat, attention_mask.dat, labels.npy, features.npy, metadata.json)")
     print("   └── test_memmap/ (input_ids.dat, attention_mask.dat, labels.npy, features.npy, metadata.json)")
 def load_split_metadata(split_name: str, config: TokenizationConfig):
-    """
-    Load metadata for a specific split from cache.
-
-    Args:
-        split_name: Name of the split ("train", "val", "test")
-        config: TokenizationConfig object
-
-    Returns:
-        Metadata dict with file paths and info
-    """
     cache_path = get_cache_path(split_name, config)
     if not os.path.exists(cache_path):
         raise FileNotFoundError(f"Cache not found: {cache_path}")
@@ -1230,16 +1201,6 @@ def load_split_metadata(split_name: str, config: TokenizationConfig):
 
 
 def memmap_loader(meta, batch_size=64):
-    """
-    Memory-efficient data loader for training with memmap files.
-
-    Args:
-        meta: Metadata dict from cache file
-        batch_size: Batch size for training
-
-    Yields:
-        Batches of tokenized data as dict with torch tensors
-    """
     import numpy as np
     import torch
 
@@ -1278,11 +1239,12 @@ def memmap_loader(meta, batch_size=64):
 """
 Example: How to use the tokenized data for training
 
+CSV Input Format Expected:
+- train.csv, val.csv, test.csv with columns: code, is_vulnerable, [feature_cols...]
+
 from tokenize_graphcodebert import load_split_metadata, memmap_loader, TokenizationConfig
 
 config = TokenizationConfig()
-
-# Load metadata for training
 train_meta = load_split_metadata("train", config)
 val_meta = load_split_metadata("val", config)
 
@@ -1297,3 +1259,4 @@ for batch in train_loader:
     loss = outputs.loss
     # ... training code ...
 """
+
