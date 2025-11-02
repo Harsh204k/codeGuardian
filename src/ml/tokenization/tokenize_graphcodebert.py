@@ -46,7 +46,7 @@ class TokenizationConfig:
 
     # Model configuration
     model_name: str = "microsoft/graphcodebert-base"
-    max_seq_length: int = 512
+    max_seq_length: int = 256  # REDUCED from 512 to avoid OOM on Kaggle
     dynamic_padding: bool = True  # Enable dynamic padding per batch
 
     # Input paths (Kaggle)
@@ -604,10 +604,11 @@ def tokenize_dataset_batch(
 
     # STREAMING TOKENIZATION - preallocate final tensors and stream chunks
     # Avoid holding many chunk tensors in memory which causes OOM.
-    chunk_size = 1000  # small chunk size for Kaggle
+    chunk_size = 500  # DRASTICALLY REDUCED for Kaggle memory constraints
     total_samples = len(all_code)
 
     logger.info(f"⚡ Streaming tokenizing {total_samples} samples in chunks of {chunk_size}...")
+    logger.info(f"🧠 EXTREME MEMORY MODE: chunk_size={chunk_size}, max_seq_length={config.max_seq_length}")
 
     # Pre-allocate final tensors on CPU to avoid extra copies during concatenation
     try:
@@ -644,12 +645,14 @@ def tokenize_dataset_batch(
 
             offset += cur_len
 
-            # Aggressive cleanup
+            # Aggressive cleanup - force immediate memory release
             del encoded, ids_cpu, att_cpu, chunk_code
             import gc
             gc.collect()
+            gc.collect()  # Call twice to ensure cleanup
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+                torch.cuda.synchronize()  # Ensure CUDA operations complete
 
         # Sanity check
         if offset != total_samples:
@@ -1102,12 +1105,12 @@ def main():
 
 
 if __name__ == "__main__":
-    # Set multiprocessing start method for compatibility
-    try:
-        if mp.get_start_method(allow_none=True) != "spawn":
-            mp.set_start_method("spawn", force=True)
-    except RuntimeError:
-        # Already set, ignore
-        pass
-
+    # Disable multiprocessing completely to avoid semaphore leaks and memory issues
+    # Set single-threaded mode for tokenization
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
+    # Do NOT use multiprocessing for this script
+    # The multiprocessing spawn was causing semaphore leaks and memory issues
+    
     main()
