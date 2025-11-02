@@ -1147,7 +1147,153 @@ if __name__ == "__main__":
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-    # Do NOT use multiprocessing for this script
-    # The multiprocessing spawn was causing semaphore leaks and memory issues
+    import gc
+    from transformers import AutoTokenizer
 
-    main()
+    config = TokenizationConfig()
+
+    # 🔒 Fully disable parallel threads in tokenizer & BLAS
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
+    print("🚀 Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        config.model_name,
+        trust_remote_code=False,
+        use_fast=True,
+        chat_template=None
+    )
+    print("✅ Tokenizer loaded successfully")
+
+    # Process ONE split at a time to avoid memory spikes
+    for split_name, file_path in [
+        ("train", config.train_path),
+        ("val", config.val_path),
+        ("test", config.test_path)
+    ]:
+        print(f"\n🚀 Processing {split_name} split...")
+
+        # Load and validate data
+        df = load_jsonl(file_path)
+        validate_data(df, split_name, config)
+
+        # Extract features
+        features, feature_names = extract_numeric_features(df, config)
+        print(f"📊 Extracted {len(feature_names)} features for {len(df)} samples")
+
+        # Process split (no scaler needed for individual processing)
+        scaler = None  # Will fit scaler on train if needed
+        if split_name == "train":
+            _, scaler = process_and_persist_split(split_name, df, features, tokenizer, config, scaler=None)
+        else:
+            _, _ = process_and_persist_split(split_name, df, features, tokenizer, config, scaler=scaler)
+
+        # Clean up memory immediately
+        del df, features
+        gc.collect()
+
+        print(f"✅ Finished {split_name} split!\n")
+
+    # Final verification
+    print("🔍 Verifying all output files exist...")
+    assert_outputs_exist(config)
+    print("✅ All tokenized datasets ready!")
+
+    print("\n" + "=" * 80)
+    print("🎉 ALL SPLITS PROCESSED SUCCESSFULLY!")
+    print("=" * 80)
+    print(f"📁 Output Directory: {config.output_base}")
+    print("   ├── train_memmap/ (input_ids.dat, attention_mask.dat, labels.npy, features.npy, metadata.json)")
+    print("   ├── val_memmap/ (input_ids.dat, attention_mask.dat, labels.npy, features.npy, metadata.json)")
+    print("   └── test_memmap/ (input_ids.dat, attention_mask.dat, labels.npy, features.npy, metadata.json)")
+def load_split_metadata(split_name: str, config: TokenizationConfig):
+    """
+    Load metadata for a specific split from cache.
+
+    Args:
+        split_name: Name of the split ("train", "val", "test")
+        config: TokenizationConfig object
+
+    Returns:
+        Metadata dict with file paths and info
+    """
+    cache_path = get_cache_path(split_name, config)
+    if not os.path.exists(cache_path):
+        raise FileNotFoundError(f"Cache not found: {cache_path}")
+
+    metadata = torch.load(cache_path)
+    return metadata
+
+
+# ============================================================================
+# TRAINING UTILITIES
+# ============================================================================
+
+
+def memmap_loader(meta, batch_size=64):
+    """
+    Memory-efficient data loader for training with memmap files.
+
+    Args:
+        meta: Metadata dict from cache file
+        batch_size: Batch size for training
+
+    Yields:
+        Batches of tokenized data as dict with torch tensors
+    """
+    import numpy as np
+    import torch
+
+    # Load memory-mapped arrays (read-only)
+    input_ids = np.memmap(
+        meta["input_ids_path"],
+        dtype=np.int32,
+        mode="r",
+        shape=(meta["total_samples"], meta["max_seq_length"])
+    )
+    attention_mask = np.memmap(
+        meta["attention_mask_path"],
+        dtype=np.int32,
+        mode="r",
+        shape=(meta["total_samples"], meta["max_seq_length"])
+    )
+    labels = np.load(meta["labels_path"], mmap_mode="r")
+    features = np.load(meta["features_path"], mmap_mode="r")
+
+    # Yield batches
+    for i in range(0, meta["total_samples"], batch_size):
+        j = min(i + batch_size, meta["total_samples"])
+
+        yield {
+            "input_ids": torch.from_numpy(input_ids[i:j].astype(np.int64)),
+            "attention_mask": torch.from_numpy(attention_mask[i:j].astype(np.int64)),
+            "labels": torch.from_numpy(labels[i:j].astype(np.int64)),
+            "features": torch.from_numpy(features[i:j].astype(np.float32)),
+        }
+
+
+# ============================================================================
+# USAGE EXAMPLE FOR TRAINING
+# ============================================================================
+
+"""
+Example: How to use the tokenized data for training
+
+from tokenize_graphcodebert import load_split_metadata, memmap_loader, TokenizationConfig
+
+config = TokenizationConfig()
+
+# Load metadata for training
+train_meta = load_split_metadata("train", config)
+val_meta = load_split_metadata("val", config)
+
+# Create data loaders
+train_loader = memmap_loader(train_meta, batch_size=32)
+val_loader = memmap_loader(val_meta, batch_size=32)
+
+# Use in training loop
+for batch in train_loader:
+    # batch contains: input_ids, attention_mask, labels, features
+    outputs = model(**batch)
+    loss = outputs.loss
+    # ... training code ...
+"""
