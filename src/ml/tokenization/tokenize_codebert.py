@@ -23,7 +23,7 @@ Input:
 /kaggle/input/codeguardian-dataset-for-model-fine-tuning/random_splitted/{split}.jsonl
 
 Output:
-/kaggle/working/tokenized/codebert/{split}_tokenized.pt
+/kaggle/working/tokenized/codebert/{split}_tokenized_{MODEL_NAME}.pt
 """
 
 import json
@@ -92,7 +92,7 @@ def tokenize_file(split: str) -> Tuple[int, int, int]:
         (total_processed, total_skipped, avg_tokens)
     """
     input_path = os.path.join(INPUT_DIR, f"{split}.jsonl")
-    output_path = os.path.join(OUTPUT_DIR, f"{split}_tokenized.pt")
+    output_path = os.path.join(OUTPUT_DIR, f"{split}_tokenized_{MODEL_NAME}.pt")
 
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -253,7 +253,7 @@ def main():
     validation_passed = True
 
     for split in SPLITS:
-        output_path = os.path.join(OUTPUT_DIR, f"{split}_tokenized.pt")
+        output_path = os.path.join(OUTPUT_DIR, f"{split}_tokenized_.pt")
 
         try:
             # Load saved file
@@ -323,10 +323,10 @@ def main():
 
     print(f"\n📁 Output Files:")
     for split in SPLITS:
-        output_path = os.path.join(OUTPUT_DIR, f"{split}_tokenized.pt")
+        output_path = os.path.join(OUTPUT_DIR, f"{split}_tokenized_{MODEL_NAME}.pt")
         if os.path.exists(output_path):
             size_mb = os.path.getsize(output_path) / (1024 * 1024)
-            print(f"  ✓ {split}_tokenized.pt ({size_mb:.2f} MB)")
+            print(f"  ✓ {split}_tokenized_{MODEL_NAME}.pt ({size_mb:.2f} MB)")
 
     if validation_passed:
         print("\n✅ All validation checks passed!")
