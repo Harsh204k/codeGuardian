@@ -812,9 +812,54 @@ def train(config: Config):
         training_history["test"] = test_metrics
 
     # Save metrics
-    with open(config.METRICS_SAVE_PATH, "w") as f:
-        json.dump(training_history, f, indent=2)
-    print(f"\n✓ Metrics saved to: {config.METRICS_SAVE_PATH}")
+    metrics_path = os.path.join(config.METRICS_DIR, "results.json")
+    with open(metrics_path, "w") as f:
+        json.dump(history, f, indent=2, default=str)
+    logger.info(f"✓ Metrics: {metrics_path}")
+
+    # Classification report
+    cm = confusion_matrix(labels, preds)
+    logger.info("\nConfusion Matrix:")
+    logger.info(f"  TN={cm[0][0]}, FP={cm[0][1]}")
+    logger.info(f"  FN={cm[1][0]}, TP={cm[1][1]}")
+
+    report = classification_report(labels, preds, target_names=["Secure", "Vulnerable"])
+    logger.info("\n" + report)
+
+    # Make results visible in Kaggle Outputs
+    os.system("cp -r /kaggle/working/metrics_graphcodebert /kaggle/working/metrics_output_graphcodebert || true")
+    os.system("cp -r /kaggle/working/checkpoints_graphcodebert /kaggle/working/checkpoints_output_graphcodebert || true")
+    os.system("cp -r /kaggle/working/graphcodebert_lora_merged /kaggle/working/graphcodebert_lora_merged || true")
+    logger.info("✓ Copied outputs to visible Kaggle directories")
+
+    # Hugging Face Hub Upload (Optional)
+    try:
+        from huggingface_hub import login
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        # Authenticate using environment variable (secure)
+        HF_TOKEN = os.getenv("HF_TOKEN", None)
+        if not HF_TOKEN:
+            logger.warning("⚠️ HF_TOKEN not found — skipping Hugging Face upload.")
+            raise ValueError("HF_TOKEN environment variable not set")
+
+        login(token=HF_TOKEN)
+        logger.info("✓ Logged into Hugging Face Hub via environment variable.")
+
+        repo_id = "urva-gandhi/codeGuardian-GraphCodeBERT"
+        model_dir = config.MERGED_MODEL_DIR
+
+        logger.info(f"\n🚀 Uploading merged model to Hugging Face Hub → {repo_id}")
+        model_hf = AutoModelForSequenceClassification.from_pretrained(model_dir)
+        tokenizer_hf = AutoTokenizer.from_pretrained(model_dir)
+
+        model_hf.push_to_hub(repo_id, commit_message="Upload CodeGuardian GraphCodeBERT-LoRA v1")
+        tokenizer_hf.push_to_hub(repo_id)
+
+        logger.info("✅ Model successfully pushed to Hugging Face Hub!")
+        logger.info("🔗 https://huggingface.co/urva-gandhi/codeGuardian-GraphCodeBERT")
+    except Exception as e:
+        logger.warning(f"HF Hub upload skipped: {e}")
 
     # Cleanup
     print(f"\n{'='*70}")
