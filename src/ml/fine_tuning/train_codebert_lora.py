@@ -193,7 +193,7 @@ class Config:
 
     # Feature fusion
     USE_ENGINEERED_FEATURES = True  # Enable if .pt files contain 'features' key
-    FEATURE_DIM = 107  # Dimension of engineered features
+    FEATURE_DIM = None  # Will be auto-detected from data
     FUSION_HIDDEN_DIM = 128
 
     # Paths - Auto-detect environment
@@ -435,8 +435,8 @@ def load_tokenized_dataset(
 
 def create_dataloaders(
     config: Config, logger: logging.Logger
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """Create train, validation, and test dataloaders"""
+) -> Tuple[DataLoader, DataLoader, DataLoader, Optional[int]]:
+    """Create train, validation, and test dataloaders. Returns feature_dim if features exist."""
     logger.info("=" * 70)
     logger.info("LOADING DATASETS")
     logger.info("=" * 70)
@@ -452,8 +452,15 @@ def create_dataloaders(
         os.path.join(config.DATA_PATH, config.TEST_FILE), config, logger
     )
 
-    # Check if features are available
+    # Check if features are available and get feature dimension
     use_features = config.USE_ENGINEERED_FEATURES and "features" in train_data
+    feature_dim = None
+
+    if use_features:
+        feature_dim = train_data["features"].shape[1]
+        logger.info(f"✓ Detected feature dimension: {feature_dim}")
+        # Update config with detected feature dim
+        config.FEATURE_DIM = feature_dim
 
     # Create datasets
     train_dataset = PreTokenizedDataset(train_data, use_features=use_features)
@@ -490,8 +497,10 @@ def create_dataloaders(
     logger.info(f"  - Val batches: {len(val_loader)}")
     logger.info(f"  - Test batches: {len(test_loader)}")
     logger.info(f"  - Using engineered features: {use_features}")
+    if use_features:
+        logger.info(f"  - Feature dimension: {feature_dim}")
 
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader, feature_dim
 
 
 # ============================================================================
@@ -510,23 +519,31 @@ def compute_class_weights(
 
 
 def initialize_model(
-    config: Config, logger: logging.Logger, use_features: bool = False
+    config: Config, logger: logging.Logger, use_features: bool = False, feature_dim: Optional[int] = None
 ) -> nn.Module:
     """Initialize model with LoRA on attention projections"""
     logger.info("=" * 70)
     logger.info("INITIALIZING MODEL")
     logger.info("=" * 70)
 
+    # Use detected feature_dim or fall back to config
+    actual_feature_dim = feature_dim if feature_dim is not None else config.FEATURE_DIM
+
+    if use_features and actual_feature_dim is None:
+        raise ValueError("Feature dimension must be specified when use_features=True")
+
     # Create base model
     model = CodeBERTForVulnerabilityDetection(
         model_name=config.MODEL_NAME,
         num_labels=config.NUM_LABELS,
         use_features=use_features,
-        feature_dim=config.FEATURE_DIM,
+        feature_dim=actual_feature_dim if use_features else 107,  # Default value for unused param
         fusion_hidden_dim=config.FUSION_HIDDEN_DIM,
     )
 
     logger.info(f"✓ Base model loaded: {config.MODEL_NAME}")
+    if use_features:
+        logger.info(f"✓ Feature fusion enabled with dim={actual_feature_dim}")
 
     # Count parameters before LoRA
     total_params = sum(p.numel() for p in model.parameters())
@@ -988,7 +1005,7 @@ def train(config: Config) -> None:
     os.makedirs(config.LOG_DIR, exist_ok=True)
 
     # Load data
-    train_loader, val_loader, test_loader = create_dataloaders(config, logger)
+    train_loader, val_loader, test_loader, feature_dim = create_dataloaders(config, logger)
 
     # Check if features are available
     first_batch = next(iter(train_loader))
@@ -1008,7 +1025,7 @@ def train(config: Config) -> None:
     logger.info(f"  - Class weights: {class_weights.tolist()}")
 
     # Initialize model
-    model = initialize_model(config, logger, use_features=use_features)
+    model = initialize_model(config, logger, use_features=use_features, feature_dim=feature_dim)
 
     # Setup loss function
     if config.USE_FOCAL_LOSS:
