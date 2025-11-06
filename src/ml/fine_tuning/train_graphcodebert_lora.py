@@ -125,6 +125,7 @@ class Config:
     USE_MIXED_PRECISION = True
     PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16
     GRADIENT_CHECKPOINTING = True
+    NUM_WORKERS = 4  # Faster dataloading
 
 # ============================================================================
 # LOGGING
@@ -224,22 +225,25 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
         train_dataset,
         batch_size=config.TRAIN_BATCH_SIZE,
         shuffle=True,
-        num_workers=2,
-        pin_memory=True
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=True
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.EVAL_BATCH_SIZE,
         shuffle=False,
-        num_workers=2,
-        pin_memory=True
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=True
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=config.EVAL_BATCH_SIZE,
         shuffle=False,
-        num_workers=2,
-        pin_memory=True
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=True
     )
 
     logger.info(f"Train batches: {len(train_loader)}")
@@ -333,24 +337,24 @@ def initialize_model(config: Config, logger: logging.Logger) -> nn.Module:
 # ============================================================================
 
 def save_checkpoint(
-    epoch: int, model, optimizer, scheduler, best_f1: float, 
+    epoch: int, model, optimizer, scheduler, best_f1: float,
     checkpoint_dir: str, logger: logging.Logger
 ) -> None:
     """Save training checkpoint"""
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
+
     checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
-    
+
     checkpoint = {
         "epoch": epoch,
         "best_f1": best_f1,
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
     }
-    
+
     # Save PEFT model separately
     model.save_pretrained(checkpoint_dir)
-    
+
     # Save training state
     torch.save(checkpoint, checkpoint_path)
     logger.info(f"✓ Checkpoint saved: epoch {epoch}, F1={best_f1:.4f}")
@@ -359,39 +363,39 @@ def load_checkpoint(
     checkpoint_dir: str, model, optimizer, scheduler, config: Config, logger: logging.Logger
 ) -> Tuple[int, float]:
     """Load training checkpoint if exists"""
-    
+
     if not os.path.exists(checkpoint_dir):
         logger.info("No checkpoint found - starting from scratch")
         return 0, 0.0
-    
+
     # Find latest checkpoint
     checkpoints = [f for f in os.listdir(checkpoint_dir) if f.startswith("checkpoint_epoch_")]
     if not checkpoints:
         logger.info("No checkpoint found - starting from scratch")
         return 0, 0.0
-    
+
     # Get latest epoch
     epochs = [int(f.split("_")[-1].replace(".pt", "")) for f in checkpoints]
     latest_epoch = max(epochs)
     checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{latest_epoch}.pt")
-    
+
     try:
         # Load PEFT model
         model = PeftModel.from_pretrained(model.base_model.model, checkpoint_dir).to(config.DEVICE)
-        
+
         # Load training state
         checkpoint = torch.load(checkpoint_path, map_location=config.DEVICE)
         optimizer.load_state_dict(checkpoint["optimizer_state"])
         scheduler.load_state_dict(checkpoint["scheduler_state"])
         best_f1 = checkpoint["best_f1"]
-        
+
         logger.info("=" * 70)
         logger.info("🔁 RESUMING FROM CHECKPOINT")
         logger.info("=" * 70)
         logger.info(f"✓ Loaded checkpoint: epoch {latest_epoch}, best F1={best_f1:.4f}")
-        
+
         return latest_epoch, best_f1
-    
+
     except Exception as e:
         logger.warning(f"Failed to load checkpoint: {e}")
         logger.info("Starting from scratch")
@@ -521,35 +525,35 @@ def merge_lora_model(config: Config, logger: logging.Logger) -> bool:
     logger.info("\n" + "=" * 70)
     logger.info("MERGING LORA ADAPTERS")
     logger.info("=" * 70)
-    
+
     try:
         # Load PEFT config to get base model name
         peft_config = PeftConfig.from_pretrained(config.FINAL_MODEL_DIR)
         base_model_name = peft_config.base_model_name_or_path
-        
+
         logger.info(f"Base model: {base_model_name}")
         logger.info(f"Loading adapters from: {config.FINAL_MODEL_DIR}")
-        
+
         # Load base model (use custom classifier)
         base_model = GraphCodeBERTClassifier(base_model_name, config.NUM_LABELS)
-        
+
         # Load and merge LoRA weights
         model_with_adapters = PeftModel.from_pretrained(base_model, config.FINAL_MODEL_DIR)
         merged_model = model_with_adapters.merge_and_unload()
-        
+
         # Save merged model
         os.makedirs(config.MERGED_MODEL_DIR, exist_ok=True)
-        
+
         # Save model state dict directly
         torch.save(merged_model.state_dict(), os.path.join(config.MERGED_MODEL_DIR, "pytorch_model.bin"))
-        
+
         # Save config
         merged_model.roberta.config.save_pretrained(config.MERGED_MODEL_DIR)
-        
+
         # Save tokenizer
         tokenizer = AutoTokenizer.from_pretrained(base_model_name)
         tokenizer.save_pretrained(config.MERGED_MODEL_DIR)
-        
+
         # Save model config for HF compatibility
         model_config = {
             "architectures": ["GraphCodeBERTClassifier"],
@@ -559,21 +563,21 @@ def merge_lora_model(config: Config, logger: logging.Logger) -> bool:
         }
         with open(os.path.join(config.MERGED_MODEL_DIR, "config.json"), "w") as f:
             json.dump(model_config, f, indent=2)
-        
+
         logger.info(f"✓ Merged model saved: {config.MERGED_MODEL_DIR}")
         logger.info(f"✓ Tokenizer saved: {config.MERGED_MODEL_DIR}")
-        
+
         # Verify saved files
         required_files = ["pytorch_model.bin", "config.json", "tokenizer.json", "tokenizer_config.json"]
         missing_files = [f for f in required_files if not os.path.exists(os.path.join(config.MERGED_MODEL_DIR, f))]
-        
+
         if missing_files:
             logger.warning(f"⚠️ Missing files: {missing_files}")
             return False
-        
+
         logger.info("✓ All required files present")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Merge failed: {e}")
         import traceback
@@ -585,14 +589,14 @@ def upload_to_huggingface(config: Config, logger: logging.Logger, metadata: Dict
     logger.info("\n" + "=" * 70)
     logger.info("UPLOADING TO HUGGINGFACE HUB")
     logger.info("=" * 70)
-    
+
     try:
         # Check if HF_TOKEN is set
         hf_token = os.getenv("HF_TOKEN")
         if not hf_token:
             logger.warning("⚠️ HF_TOKEN not found - skipping upload")
             return False
-        
+
         # Create README.md with model card
         readme_content = f"""---
 language: code
@@ -660,16 +664,16 @@ model = AutoModel.from_pretrained("{config.HF_REPO_ID}")
 }}
 ```
 """
-        
+
         readme_path = os.path.join(config.MERGED_MODEL_DIR, "README.md")
         with open(readme_path, "w") as f:
             f.write(readme_content)
-        
+
         logger.info("✓ Created model card (README.md)")
-        
+
         # Upload using HuggingFace CLI
         logger.info(f"🚀 Uploading to {config.HF_REPO_ID}...")
-        
+
         upload_cmd = [
             "huggingface-cli", "upload",
             config.HF_REPO_ID,
@@ -677,9 +681,9 @@ model = AutoModel.from_pretrained("{config.HF_REPO_ID}")
             "--repo-type", "model",
             "--commit-message", f"Upload GraphCodeBERT-LoRA model (F1: {metadata['results']['test_f1']:.4f})"
         ]
-        
+
         result = subprocess.run(upload_cmd, capture_output=True, text=True)
-        
+
         if result.returncode == 0:
             logger.info("✅ Model successfully uploaded to HuggingFace Hub!")
             logger.info(f"🔗 https://huggingface.co/{config.HF_REPO_ID}")
@@ -687,7 +691,7 @@ model = AutoModel.from_pretrained("{config.HF_REPO_ID}")
         else:
             logger.error(f"❌ Upload failed: {result.stderr}")
             return False
-            
+
     except FileNotFoundError:
         logger.error("❌ huggingface-cli not found. Install with: pip install huggingface_hub[cli]")
         return False
@@ -800,10 +804,10 @@ def train(config: Config, logger: logging.Logger):
         if (val_metrics["f1"] - best_f1) > config.EARLY_STOPPING_MIN_DELTA:
             best_f1 = val_metrics["f1"]
             patience = 0
-            
+
             # Save checkpoint
             save_checkpoint(epoch, model, optimizer, scheduler, best_f1, config.CHECKPOINT_DIR, logger)
-            
+
             # Also save as final model
             model.save_pretrained(config.FINAL_MODEL_DIR)
             logger.info(f"✓ Best model saved (F1: {best_f1:.4f})")
@@ -909,7 +913,7 @@ def train(config: Config, logger: logging.Logger):
 
     # Merge LoRA adapters
     merge_success = merge_lora_model(config, logger)
-    
+
     if merge_success:
         # Upload to HuggingFace Hub
         upload_to_huggingface(config, logger, metadata)

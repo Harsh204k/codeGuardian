@@ -131,6 +131,7 @@ class Config:
     USE_MIXED_PRECISION = True
     PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16
     GRADIENT_CHECKPOINTING = False
+    NUM_WORKERS = 4  # Faster dataloading
 
 # ============================================================================
 # LOGGING
@@ -230,22 +231,25 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
         train_dataset,
         batch_size=config.TRAIN_BATCH_SIZE,
         shuffle=True,
-        num_workers=2,
-        pin_memory=True
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=True
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.EVAL_BATCH_SIZE,
         shuffle=False,
-        num_workers=2,
-        pin_memory=True
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=True
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=config.EVAL_BATCH_SIZE,
         shuffle=False,
-        num_workers=2,
-        pin_memory=True
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=True
     )
 
     logger.info(f"Train batches: {len(train_loader)}")
