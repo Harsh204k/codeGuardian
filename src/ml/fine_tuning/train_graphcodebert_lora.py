@@ -250,6 +250,7 @@ class GraphCodeBERTClassifier(nn.Module):
     def __init__(self, model_name: str, num_labels: int = 2):
         super().__init__()
         self.roberta = AutoModel.from_pretrained(model_name)
+        self.config = self.roberta.config  # Expose config for PEFT compatibility
         self.classifier = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(self.roberta.config.hidden_size, num_labels)
