@@ -1,91 +1,44 @@
-# type: ignore
-
+#!/usr/bin/env python3
+# =============================================================
+# codeGuardian LoRA Fine-tuning Pipeline (Pure-code version)
+# Model: microsoft/graphcodebert-base
+# Author: Urva Gandhi
+# =============================================================
 """
-Enhanced GraphCodeBERT Fine-Tuning with LoRA for Vulnerability Detection
-===============================================================================
+Fine-tunes GraphCodeBERT using LoRA for vulnerability detection.
+Optimized for Kaggle Free GPU (T4/P100) with mixed precision and early stopping.
 
-Production-ready LoRA fine-tuning script optimized for Kaggle Free GPU.
-Supports pre-tokenized .pt datasets with optional engineered features.
-
-Key Features:
-- LoRA r=16, α=32, dropout=0.1
-- Mixed precision (BF16 on A100, FP16 on T4/P100)
-- Weighted BCE loss with class balancing
-- Early stopping on validation F1
+Features:
+- Pure-code training (no engineered features)
+- LoRA r=8, α=16, dropout=0.1
+- Mixed precision (BF16/FP16 auto-detect)
+- Weighted cross-entropy + optional Focal Loss
+- Early stopping on F1 score
 - Gradient accumulation & checkpointing
-- Per-language metrics tracking
-- Auto OOM recovery
-- Comprehensive logging
-
-Hardware Support:
-- Kaggle T4/P100: 16GB VRAM, FP16
-- A100/V100: BF16 support
-
-Author: CodeGuardian Team - IIT Delhi Hackathon
-Date: November 2025
+- Automatic LoRA adapter merging
 """
-
-# Fix httpx compatibility issue on Kaggle
-import sys
-import subprocess
-
-
-def fix_kaggle_dependencies():
-    """Fix transformers/httpx compatibility on Kaggle"""
-    try:
-        print("🔧 Checking dependencies...")
-        subprocess.check_call(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "-q",
-                "--upgrade",
-                "httpx>=0.24.0",
-                "huggingface-hub>=0.19.0",
-                "transformers>=4.36.0",
-            ]
-        )
-        print("✓ Dependencies updated successfully")
-    except Exception as e:
-        print(f"⚠️ Warning: Could not update dependencies: {e}")
-        print("Continuing with existing versions...")
-
-
-# Run fix before imports
-fix_kaggle_dependencies()
 
 import os
+import sys
 import gc
 import json
 import time
 import logging
-import csv
 import argparse
+from typing import Dict, Tuple, Optional
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset
 from torch.cuda.amp import autocast, GradScaler
-from transformers import RobertaModel, RobertaConfig, get_linear_schedule_with_warmup
-from peft import LoraConfig, get_peft_model, TaskType
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    precision_score,
-    recall_score,
-    classification_report,
-    confusion_matrix,
-)
+from transformers import AutoModel, get_linear_schedule_with_warmup
+from peft import LoraConfig, get_peft_model, PeftModel
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, classification_report, confusion_matrix
 from tqdm import tqdm
-import warnings
 
-warnings.filterwarnings("ignore")
-
-# Enable deterministic behavior
+# Reproducibility
 torch.manual_seed(42)
 np.random.seed(42)
 if torch.cuda.is_available():
@@ -93,23 +46,16 @@ if torch.cuda.is_available():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# Enable TF32 for faster matmul on Ampere GPUs
-torch.backends.cuda.matmul.allow_tf32 = True
-
 # ============================================================================
-# GPU CAPABILITY DETECTION
+# GPU DETECTION
 # ============================================================================
-
 
 def check_bf16_support() -> bool:
-    """Check if current GPU supports BFloat16 (requires compute capability >= 8.0)"""
+    """Check if GPU supports BFloat16 (compute capability >= 8.0)"""
     if not torch.cuda.is_available():
         return False
     capability = torch.cuda.get_device_capability()
-    # BFloat16 requires Ampere or newer (compute capability >= 8.0)
-    # T4 is 7.5 (Turing), P100 is 6.0 (Pascal) - both require FP16
     return capability[0] >= 8
-
 
 BF16_SUPPORTED = check_bf16_support()
 
@@ -117,391 +63,291 @@ BF16_SUPPORTED = check_bf16_support()
 # CONFIGURATION
 # ============================================================================
 
-
 class Config:
-    """Enhanced configuration for GraphCodeBERT fine-tuning - Stage I optimized."""
+    """Training configuration"""
 
-    # Model settings
+    # Model
     MODEL_NAME = "microsoft/graphcodebert-base"
-    MODEL_CHOICE = "graphcodebert"
     NUM_LABELS = 2
 
-    # Enhanced LoRA configuration for Stage I
-    LORA_R = 16  # Increased from 8
-    LORA_ALPHA = 32  # Increased from 16
+    # LoRA
+    LORA_R = 8
+    LORA_ALPHA = 16
     LORA_DROPOUT = 0.1
-    ENABLE_LAYER_NORM_TUNING = True  # Enable for better performance
+    LORA_TARGET_MODULES = ["query", "value"]
 
-    # Training hyperparameters - Stage I optimized
+    # Training
     EPOCHS = 3
-    TRAIN_BATCH_SIZE = 64
-    EVAL_BATCH_SIZE = 128
-    LEARNING_RATE = 2e-4  # Reduced from 2e-3 for stability
-    WEIGHT_DECAY = 0.01
+    TRAIN_BATCH_SIZE = 4
+    EVAL_BATCH_SIZE = 8
+    LEARNING_RATE = 3e-5
+    WEIGHT_DECAY = 1e-2
     MAX_GRAD_NORM = 1.0
-    WARMUP_STEPS = 100
-    GRADIENT_ACCUMULATION_STEPS = 2
+    WARMUP_RATIO = 0.05
+    GRADIENT_ACCUMULATION_STEPS = 4
 
-    # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 3
+    # Early stopping
+    EARLY_STOPPING_PATIENCE = 2
     EARLY_STOPPING_MIN_DELTA = 0.001
 
-    # Paths - Auto-detect environment
+    # Loss
+    USE_WEIGHTED_LOSS = True
+    USE_FOCAL_LOSS = False
+    FOCAL_GAMMA = 2.0
+
+    # Paths
     if os.path.exists("/kaggle/input"):
-        # Kaggle environment
-        DATA_PATH = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/tokenized/graphcodebert"
-        CHECKPOINT_DIR = "/kaggle/working/ml/fine_tuning/graphcodebert"
-        METRICS_DIR = "/kaggle/working/ml/fine_tuning/graphcodebert"
+        DATA_PATH = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/tokenized/graphcodebert-base"
+        OUTPUT_DIR = "/kaggle/working"
     else:
-        # Local/HPC environment
         DATA_PATH = "datasets/tokenized/graphcodebert"
-        CHECKPOINT_DIR = "src/ml/fine_tuning/graphcodebert"
-        METRICS_DIR = "src/ml/fine_tuning/graphcodebert"
+        OUTPUT_DIR = "outputs"
 
-    TRAIN_FILE = "train_tokenized_graphcodebert.pt"
-    VAL_FILE = "val_tokenized_graphcodebert.pt"
-    TEST_FILE = "test_tokenized_graphcodebert.pt"
+    CHECKPOINT_DIR = f"{OUTPUT_DIR}/checkpoints_graphcodebert"
+    METRICS_DIR = f"{OUTPUT_DIR}/metrics_graphcodebert"
+    LOG_DIR = f"{OUTPUT_DIR}/logs"
+    FINAL_MODEL_DIR = f"{OUTPUT_DIR}/graphcodebert_lora_final"
+    MERGED_MODEL_DIR = f"{OUTPUT_DIR}/graphcodebert_lora_merged"
 
-    # Output files
-    MODEL_SAVE_PATH = f"{CHECKPOINT_DIR}/graphcodebert_final.pt"
-    BEST_MODEL_PATH = f"{CHECKPOINT_DIR}/graphcodebert_best.pt"
-    METRICS_SAVE_PATH = f"{METRICS_DIR}/graphcodebert_metrics.json"
-    TRAINING_LOG = f"{METRICS_DIR}/graphcodebert_training.log"
-
-    # Device and precision
+    # Device
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     USE_MIXED_PRECISION = True
     PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16
-
-    # Monitoring
-    LOG_INTERVAL = 50
-    SAVE_BEST_MODEL = True
-
+    GRADIENT_CHECKPOINTING = True
 
 # ============================================================================
-# MODEL DEFINITION
+# LOGGING
 # ============================================================================
 
+def setup_logging(log_dir: str) -> logging.Logger:
+    """Setup logging to file and console"""
+    os.makedirs(log_dir, exist_ok=True)
 
-class GraphCodeBERTForVulnerabilityDetection(nn.Module):
-    """GraphCodeBERT model with classification head for vulnerability detection"""
+    logger = logging.getLogger("GraphCodeBERT_LoRA")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
 
-    def __init__(self, model_name: str, num_labels: int = 2):
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    fh = logging.FileHandler(os.path.join(log_dir, "train_log.txt"), mode="a")
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+
+    ch = logging.StreamHandler()
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    return logger
+
+# ============================================================================
+# LOSS FUNCTIONS
+# ============================================================================
+
+class FocalLoss(nn.Module):
+    """Focal Loss for handling class imbalance"""
+
+    def __init__(self, gamma: float = 2.0, alpha: Optional[torch.Tensor] = None):
         super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
 
-        # Load model with error handling for Kaggle environment
-        print(f"Loading model: {model_name}")
-
-        # Strategy 1: Try loading with updated transformers
-        try:
-            from transformers import AutoModel, AutoConfig
-
-            self.config = AutoConfig.from_pretrained(model_name, force_download=False)
-            self.roberta = AutoModel.from_pretrained(
-                model_name,
-                config=self.config,
-                force_download=False,
-            )
-            print("✓ Loaded successfully using AutoModel")
-        except Exception as e:
-            print(f"⚠️ AutoModel attempt failed: {str(e)[:100]}...")
-
-            # Strategy 2: Try with explicit cache directory
-            try:
-                cache_dir = "/kaggle/working/hf_cache"
-                os.makedirs(cache_dir, exist_ok=True)
-                self.config = RobertaConfig.from_pretrained(
-                    model_name,
-                    cache_dir=cache_dir,
-                    force_download=False,
-                )
-                self.roberta = RobertaModel.from_pretrained(
-                    model_name,
-                    config=self.config,
-                    cache_dir=cache_dir,
-                    force_download=False,
-                )
-                print("✓ Loaded successfully using cache directory")
-            except Exception as e2:
-                print(f"⚠️ Cache directory attempt failed: {str(e2)[:100]}...")
-
-                # Strategy 3: Try legacy loading without any special flags
-                try:
-                    import transformers
-
-                    print(f"Transformers version: {transformers.__version__}")
-                    self.config = RobertaConfig.from_pretrained(model_name)
-                    self.roberta = RobertaModel.from_pretrained(model_name)
-                    print("✓ Loaded successfully using legacy method")
-                except Exception as e3:
-                    print(f"⚠️ Legacy method failed: {str(e3)[:100]}...")
-                    print("\n" + "=" * 70)
-                    print("❌ ALL LOADING STRATEGIES FAILED")
-                    print("=" * 70)
-                    print("\nPossible solutions:")
-                    print("1. Ensure internet is enabled: Settings → Internet → On")
-                    print("2. Try using a different accelerator (P100, TPU)")
-                    print("3. Pre-download model to Kaggle dataset:")
-                    print(
-                        "   - Download from https://huggingface.co/microsoft/graphcodebert-base"
-                    )
-                    print("   - Upload as Kaggle dataset")
-                    print("   - Change model_name to dataset path")
-                    print("=" * 70)
-                    raise RuntimeError(
-                        f"Failed to load '{model_name}' after trying 3 strategies. "
-                        f"Last error: {str(e3)}"
-                    ) from e3
-
-        # Classification head (this is what we'll train)
-        self.classifier = nn.Sequential(
-            nn.Dropout(0.1), nn.Linear(self.config.hidden_size, num_labels)
-        )
-
-        # Freeze the backbone (RoBERTa encoder)
-        for param in self.roberta.parameters():
-            param.requires_grad = False
-
-    def forward(self, input_ids=None, attention_mask=None, **kwargs):
-        """
-        Forward pass with **kwargs to handle PEFT library arguments
-
-        Args:
-            input_ids: Input token IDs
-            attention_mask: Attention mask
-            **kwargs: Additional arguments from PEFT (e.g., inputs_embeds, output_hidden_states)
-        """
-        # PEFT may pass inputs_embeds instead of input_ids, handle both
-        if input_ids is None and "inputs_embeds" in kwargs:
-            outputs = self.roberta(
-                inputs_embeds=kwargs["inputs_embeds"], attention_mask=attention_mask
-            )
-        else:
-            outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
-
-        pooled_output = outputs.pooler_output  # [CLS] token representation
-        logits = self.classifier(pooled_output)
-        return logits
-
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        bce_loss = nn.functional.cross_entropy(inputs, targets, reduction="none")
+        pt = torch.exp(-bce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * bce_loss
+        if self.alpha is not None:
+            focal_loss = self.alpha[targets] * focal_loss
+        return focal_loss.mean()
 
 # ============================================================================
 # DATA LOADING
 # ============================================================================
 
-
-def load_tokenized_dataset(file_path: str, config: Config):
+def load_tokenized_dataset(file_path: str, logger: logging.Logger) -> TensorDataset:
     """Load pre-tokenized dataset from .pt file"""
-    print(f"Loading dataset from: {file_path}")
+    logger.info(f"Loading: {file_path}")
 
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Dataset not found: {file_path}")
 
-    data = torch.load(file_path, map_location="cpu", weights_only=False)
+    data = torch.load(file_path, map_location="cpu")
 
     # Extract tensors
     input_ids = data["input_ids"]
     attention_mask = data["attention_mask"]
     labels = data["labels"]
 
-    print(f"✓ Loaded {len(input_ids)} samples")
-    print(f"  - Input shape: {input_ids.shape}")
-    print(f"  - Labels distribution: {torch.bincount(labels)}")
+    logger.info(f"  Samples: {len(labels):,}")
+    logger.info(f"  Shape: {input_ids.shape}")
+    logger.info(f"  Labels: {torch.bincount(labels).tolist()}")
 
-    # Create TensorDataset
-    dataset = TensorDataset(input_ids, attention_mask, labels)
-    return dataset
+    return TensorDataset(input_ids, attention_mask, labels)
 
-
-def create_dataloaders(config: Config):
+def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """Create train, validation, and test dataloaders"""
-    print("\n" + "=" * 70)
-    print("LOADING DATASETS")
-    print("=" * 70)
+    logger.info("=" * 70)
+    logger.info("LOADING DATASETS")
+    logger.info("=" * 70)
 
-    # Load datasets
     train_dataset = load_tokenized_dataset(
-        os.path.join(config.DATA_PATH, config.TRAIN_FILE), config
+        os.path.join(config.DATA_PATH, "train_tokenized_graphcodebert-base.pt"), logger
     )
     val_dataset = load_tokenized_dataset(
-        os.path.join(config.DATA_PATH, config.VAL_FILE), config
+        os.path.join(config.DATA_PATH, "val_tokenized_graphcodebert-base.pt"), logger
     )
     test_dataset = load_tokenized_dataset(
-        os.path.join(config.DATA_PATH, config.TEST_FILE), config
+        os.path.join(config.DATA_PATH, "test_tokenized_graphcodebert-base.pt"), logger
     )
 
-    # Create dataloaders with persistent workers and prefetch
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.TRAIN_BATCH_SIZE,
         shuffle=True,
         num_workers=2,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2,
+        pin_memory=True
     )
-
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.EVAL_BATCH_SIZE,
         shuffle=False,
         num_workers=2,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2,
+        pin_memory=True
     )
-
     test_loader = DataLoader(
         test_dataset,
         batch_size=config.EVAL_BATCH_SIZE,
         shuffle=False,
         num_workers=2,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2,
+        pin_memory=True
     )
 
-    print(f"\n✓ DataLoaders created successfully")
-    print(f"  - Train batches: {len(train_loader)}")
-    print(f"  - Val batches: {len(val_loader)}")
-    print(f"  - Test batches: {len(test_loader)}")
+    logger.info(f"Train batches: {len(train_loader)}")
+    logger.info(f"Val batches: {len(val_loader)}")
+    logger.info(f"Test batches: {len(test_loader)}")
 
     return train_loader, val_loader, test_loader
 
-
 # ============================================================================
-# MODEL INITIALIZATION
+# MODEL
 # ============================================================================
 
+class GraphCodeBERTClassifier(nn.Module):
+    """GraphCodeBERT with classification head"""
 
-def initialize_model(config: Config):
-    """Initialize model with LoRA on final classification layer only"""
-    print("\n" + "=" * 70)
-    print("INITIALIZING MODEL")
-    print("=" * 70)
+    def __init__(self, model_name: str, num_labels: int = 2):
+        super().__init__()
+        self.roberta = AutoModel.from_pretrained(model_name)
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(self.roberta.config.hidden_size, num_labels)
+        )
 
-    # Create base model
-    model = GraphCodeBERTForVulnerabilityDetection(
-        model_name=config.MODEL_NAME, num_labels=config.NUM_LABELS
-    )
+        # Freeze backbone
+        for param in self.roberta.parameters():
+            param.requires_grad = False
 
-    print(f"✓ Base model loaded: {config.MODEL_NAME}")
+    def forward(self, input_ids, attention_mask, **kwargs):
+        outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
+        pooled = outputs.pooler_output
+        logits = self.classifier(pooled)
+        return logits
 
-    # Count parameters before LoRA
+def compute_class_weights(labels: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """Compute class weights for imbalanced datasets"""
+    class_counts = torch.bincount(labels)
+    total = len(labels)
+    weights = total / (len(class_counts) * class_counts.float())
+    return weights.to(device)
+
+def initialize_model(config: Config, logger: logging.Logger) -> nn.Module:
+    """Initialize model with LoRA"""
+    logger.info("=" * 70)
+    logger.info("INITIALIZING MODEL")
+    logger.info("=" * 70)
+
+    model = GraphCodeBERTClassifier(config.MODEL_NAME, config.NUM_LABELS)
+    logger.info(f"Base model: {config.MODEL_NAME}")
+
     total_params = sum(p.numel() for p in model.parameters())
-    trainable_params_before = sum(
-        p.numel() for p in model.parameters() if p.requires_grad
-    )
+    trainable_before = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print(f"\n📊 Parameters before LoRA:")
-    print(f"  - Total: {total_params:,}")
-    print(
-        f"  - Trainable: {trainable_params_before:,} ({100*trainable_params_before/total_params:.2f}%)"
-    )
+    logger.info(f"Total params: {total_params:,}")
+    logger.info(f"Trainable before LoRA: {trainable_before:,} ({100*trainable_before/total_params:.2f}%)")
 
-    # Apply LoRA to classifier and last encoder layer for better expressiveness
+    # Apply LoRA
     lora_config = LoraConfig(
-        task_type=TaskType.SEQ_CLS,
+        task_type="SEQ_CLS",
         r=config.LORA_R,
         lora_alpha=config.LORA_ALPHA,
         lora_dropout=config.LORA_DROPOUT,
-        target_modules=["classifier.1", "roberta.encoder.layer.11.output.dense"],
+        target_modules=config.LORA_TARGET_MODULES,
         bias="none",
-        inference_mode=False,
+        inference_mode=False
     )
 
-    # Wrap model with PEFT
     model = get_peft_model(model, lora_config)
 
-    # Optionally unfreeze LayerNorm in last encoder block
-    if config.ENABLE_LAYER_NORM_TUNING:
-        for param in model.base_model.model.roberta.encoder.layer[
-            11
-        ].output.LayerNorm.parameters():
-            param.requires_grad = True
+    if config.GRADIENT_CHECKPOINTING:
+        try:
+            if hasattr(model.base_model, "roberta"):
+                model.base_model.roberta.gradient_checkpointing_enable()
+            elif hasattr(model.base_model, "model") and hasattr(model.base_model.model, "roberta"):
+                model.base_model.model.roberta.gradient_checkpointing_enable()
+            logger.info("✓ Gradient checkpointing enabled")
+        except Exception as e:
+            logger.warning(f"Could not enable gradient checkpointing: {e}")
 
-    # Count parameters after LoRA
-    trainable_params_after = sum(
-        p.numel() for p in model.parameters() if p.requires_grad
-    )
+    trainable_after = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print(f"\n✓ LoRA applied to final classification layer")
-    print(f"  - LoRA rank (r): {config.LORA_R}")
-    print(f"  - LoRA alpha: {config.LORA_ALPHA}")
-    print(f"  - LoRA dropout: {config.LORA_DROPOUT}")
+    logger.info(f"LoRA config: r={config.LORA_R}, α={config.LORA_ALPHA}, dropout={config.LORA_DROPOUT}")
+    logger.info(f"Target modules: {config.LORA_TARGET_MODULES}")
+    logger.info(f"Trainable after LoRA: {trainable_after:,} ({100*trainable_after/total_params:.2f}%)")
+    logger.info(f"Memory reduction: {100*(1-trainable_after/total_params):.1f}%")
 
-    print(f"\n📊 Parameters after LoRA:")
-    print(
-        f"  - Trainable: {trainable_params_after:,} ({100*trainable_params_after/total_params:.2f}%)"
-    )
-    print(f"  - Memory reduction: {100*(1-trainable_params_after/total_params):.2f}%")
-
-    model = model.to(config.DEVICE)
-
-    # Compile model for faster execution (PyTorch 2.0+)
-    # Note: Disabled due to compatibility issues with PEFT + evaluation
-    # The training still benefits from other optimizations (mixed precision, gradient accumulation, etc.)
-    # try:
-    #     model = torch.compile(model)
-    #     print("\n✓ Model compiled with torch.compile()")
-    # except Exception as e:
-    #     print(f"\n⚠ torch.compile() not available: {e}")
-
-    print("\n⚠️ torch.compile() disabled for PEFT compatibility")
-    print(
-        "   Training will still be optimized with mixed precision & gradient accumulation"
-    )
-
-    return model
-
+    return model.to(config.DEVICE)
 
 # ============================================================================
-# TRAINING UTILITIES
+# TRAINING
 # ============================================================================
 
-
-def calculate_metrics(predictions, labels):
+def calculate_metrics(predictions: np.ndarray, labels: np.ndarray) -> Dict[str, float]:
     """Calculate evaluation metrics"""
-    accuracy = accuracy_score(labels, predictions)
-    f1 = f1_score(labels, predictions, average="binary", zero_division=0)
-    precision = precision_score(labels, predictions, average="binary", zero_division=0)
-    recall = recall_score(labels, predictions, average="binary", zero_division=0)
-
-    return {"accuracy": accuracy, "f1": f1, "precision": precision, "recall": recall}
-
+    return {
+        "accuracy": accuracy_score(labels, predictions),
+        "f1": f1_score(labels, predictions, average="binary", zero_division=0),
+        "precision": precision_score(labels, predictions, average="binary", zero_division=0),
+        "recall": recall_score(labels, predictions, average="binary", zero_division=0)
+    }
 
 def train_epoch(
-    model, train_loader, optimizer, scheduler, scaler, config: Config, epoch: int
-):
-    """Train for one epoch with gradient accumulation"""
+    model, train_loader, optimizer, scheduler, scaler, criterion,
+    config: Config, logger: logging.Logger, epoch: int
+) -> Dict[str, float]:
+    """Train for one epoch"""
     model.train()
     total_loss = 0
-    all_predictions = []
+    all_preds = []
     all_labels = []
 
-    progress_bar = tqdm(
-        train_loader, desc=f"Epoch {epoch}/{config.EPOCHS} [TRAIN]", ncols=100
-    )
-
-    criterion = nn.CrossEntropyLoss()
-    accumulation_steps = config.GRADIENT_ACCUMULATION_STEPS
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{config.EPOCHS} [TRAIN]")
+    optimizer.zero_grad()
 
     for batch_idx, batch in enumerate(progress_bar):
         input_ids = batch[0].to(config.DEVICE)
         attention_mask = batch[1].to(config.DEVICE)
         labels = batch[2].to(config.DEVICE)
 
-        # Forward pass with mixed precision
         if config.USE_MIXED_PRECISION:
-            with autocast(enabled=True, dtype=config.PRECISION_DTYPE):
+            with autocast(dtype=config.PRECISION_DTYPE):
                 logits = model(input_ids=input_ids, attention_mask=attention_mask)
-                loss = criterion(logits, labels)
-                loss = loss / accumulation_steps  # Scale loss for accumulation
+                loss = criterion(logits, labels) / config.GRADIENT_ACCUMULATION_STEPS
 
-            # Backward pass with gradient scaling
             scaler.scale(loss).backward()
 
-            # Update weights every accumulation_steps
-            if (batch_idx + 1) % accumulation_steps == 0:
+            if (batch_idx + 1) % config.GRADIENT_ACCUMULATION_STEPS == 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.MAX_GRAD_NORM)
                 scaler.step(optimizer)
@@ -510,306 +356,230 @@ def train_epoch(
                 optimizer.zero_grad()
         else:
             logits = model(input_ids=input_ids, attention_mask=attention_mask)
-            loss = criterion(logits, labels)
-            loss = loss / accumulation_steps
+            loss = criterion(logits, labels) / config.GRADIENT_ACCUMULATION_STEPS
             loss.backward()
 
-            if (batch_idx + 1) % accumulation_steps == 0:
+            if (batch_idx + 1) % config.GRADIENT_ACCUMULATION_STEPS == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.MAX_GRAD_NORM)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
 
-        # Track metrics
-        total_loss += loss.item() * accumulation_steps
-        predictions = torch.argmax(logits, dim=1).cpu().numpy()
-        all_predictions.extend(predictions)
+        total_loss += loss.item() * config.GRADIENT_ACCUMULATION_STEPS
+        preds = torch.argmax(logits, dim=1).cpu().numpy()
+        all_preds.extend(preds)
         all_labels.extend(labels.cpu().numpy())
 
-        # Update progress bar
-        if (batch_idx + 1) % config.LOG_INTERVAL == 0:
-            avg_loss = total_loss / (batch_idx + 1)
-            progress_bar.set_postfix(
-                {"loss": f"{avg_loss:.4f}", "lr": f"{scheduler.get_last_lr()[0]:.2e}"}
-            )
+        progress_bar.set_postfix({"loss": f"{total_loss/(batch_idx+1):.4f}"})
 
-    # Calculate epoch metrics
-    avg_loss = total_loss / len(train_loader)
-    metrics = calculate_metrics(all_predictions, all_labels)
-    metrics["loss"] = avg_loss
-
+    metrics = calculate_metrics(np.array(all_preds), np.array(all_labels))
+    metrics["loss"] = total_loss / len(train_loader)
     return metrics
 
-
-def evaluate(model, data_loader, config: Config, split_name: str):
-    """Evaluate model on validation or test set"""
+def evaluate(
+    model, data_loader, criterion, config: Config, logger: logging.Logger, split_name: str
+) -> Dict[str, float]:
+    """Evaluate model"""
     model.eval()
     total_loss = 0
-    all_predictions = []
+    all_preds = []
     all_labels = []
 
-    criterion = nn.CrossEntropyLoss()
-
-    progress_bar = tqdm(data_loader, desc=f"{split_name.upper()}", ncols=100)
-
     with torch.no_grad():
-        for batch in progress_bar:
+        for batch in tqdm(data_loader, desc=f"{split_name.upper()}"):
             input_ids = batch[0].to(config.DEVICE)
             attention_mask = batch[1].to(config.DEVICE)
             labels = batch[2].to(config.DEVICE)
 
-            # Forward pass with mixed precision
             if config.USE_MIXED_PRECISION:
-                with autocast(enabled=True, dtype=config.PRECISION_DTYPE):
+                with autocast(dtype=config.PRECISION_DTYPE):
                     logits = model(input_ids=input_ids, attention_mask=attention_mask)
                     loss = criterion(logits, labels)
             else:
                 logits = model(input_ids=input_ids, attention_mask=attention_mask)
                 loss = criterion(logits, labels)
 
-            # Track metrics
             total_loss += loss.item()
-            predictions = torch.argmax(logits, dim=1).cpu().numpy()
-            all_predictions.extend(predictions)
+            preds = torch.argmax(logits, dim=1).cpu().numpy()
+            all_preds.extend(preds)
             all_labels.extend(labels.cpu().numpy())
 
-    # Calculate metrics
-    avg_loss = total_loss / len(data_loader)
-    metrics = calculate_metrics(all_predictions, all_labels)
-    metrics["loss"] = avg_loss
-
+    metrics = calculate_metrics(np.array(all_preds), np.array(all_labels))
+    metrics["loss"] = total_loss / len(data_loader)
+    metrics["predictions"] = np.array(all_preds)
+    metrics["labels"] = np.array(all_labels)
     return metrics
-
 
 # ============================================================================
 # MAIN TRAINING LOOP
 # ============================================================================
 
-
-def train(config: Config):
+def train(config: Config, logger: logging.Logger):
     """Main training function"""
     start_time = time.time()
 
-    print("\n" + "=" * 70)
-    print("CODEGUARDIAN - GRAPHCODEBERT FINE-TUNING WITH LORA (OPTIMIZED)")
-    print("=" * 70)
-    print(f"Device: {config.DEVICE}")
-
-    # Display precision info
-    if config.USE_MIXED_PRECISION:
-        precision_name = (
-            "BFloat16" if config.PRECISION_DTYPE == torch.bfloat16 else "Float16"
-        )
-        print(f"Precision: {precision_name} (Mixed Precision)")
-    else:
-        print(f"Precision: Float32")
-
-    print(f"Train Batch Size: {config.TRAIN_BATCH_SIZE}")
-    print(f"Eval Batch Size: {config.EVAL_BATCH_SIZE}")
-    print(f"Gradient Accumulation: {config.GRADIENT_ACCUMULATION_STEPS}x")
-    print(
-        f"Effective Batch Size: {config.TRAIN_BATCH_SIZE * config.GRADIENT_ACCUMULATION_STEPS}"
-    )
-    print(f"Learning Rate: {config.LEARNING_RATE}")
-    print(f"Epochs: {config.EPOCHS}")
+    logger.info("=" * 70)
+    logger.info("GRAPHCODEBERT LORA FINE-TUNING (PURE-CODE)")
+    logger.info("=" * 70)
+    logger.info(f"Device: {config.DEVICE}")
+    logger.info(f"Precision: {'BFloat16' if config.PRECISION_DTYPE == torch.bfloat16 else 'Float16'}")
+    logger.info(f"Batch size: {config.TRAIN_BATCH_SIZE} (effective: {config.TRAIN_BATCH_SIZE * config.GRADIENT_ACCUMULATION_STEPS})")
+    logger.info(f"Learning rate: {config.LEARNING_RATE}")
+    logger.info(f"Epochs: {config.EPOCHS}")
 
     if torch.cuda.is_available():
-        print(f"\n🎮 GPU Info:")
-        print(f"  - Name: {torch.cuda.get_device_name(0)}")
-        print(
-            f"  - Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
-        )
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
+        logger.info(f"\n🎮 GPU: {gpu_name} ({gpu_mem:.1f} GB)")
         capability = torch.cuda.get_device_capability()
-        print(f"  - Compute Capability: {capability[0]}.{capability[1]}")
-        print(f"  - BFloat16 Support: {'Yes' if BF16_SUPPORTED else 'No (using FP16)'}")
+        logger.info(f"  Compute Capability: {capability[0]}.{capability[1]}")
+        logger.info(f"  BFloat16 Support: {'Yes' if BF16_SUPPORTED else 'No (using FP16)'}")
 
-    # Create checkpoint directory
-    os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
+    # Create directories
+    for dir_path in [config.CHECKPOINT_DIR, config.METRICS_DIR, config.LOG_DIR]:
+        os.makedirs(dir_path, exist_ok=True)
 
     # Load data
-    train_loader, val_loader, test_loader = create_dataloaders(config)
+    train_loader, val_loader, test_loader = create_dataloaders(config, logger)
+
+    # Compute class weights
+    logger.info("\nComputing class weights...")
+    train_data = torch.load(os.path.join(config.DATA_PATH, "train_tokenized_graphcodebert-base.pt"))
+    class_weights = compute_class_weights(train_data["labels"], config.DEVICE)
+    logger.info(f"Class weights: {class_weights.tolist()}")
 
     # Initialize model
-    model = initialize_model(config)
+    model = initialize_model(config, logger)
 
-    # Setup optimizer
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY
-    )
+    # Setup loss
+    if config.USE_FOCAL_LOSS:
+        criterion = FocalLoss(gamma=config.FOCAL_GAMMA, alpha=class_weights)
+        logger.info(f"Loss: Focal Loss (γ={config.FOCAL_GAMMA})")
+    elif config.USE_WEIGHTED_LOSS:
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        logger.info("Loss: Weighted Cross Entropy")
+    else:
+        criterion = nn.CrossEntropyLoss()
+        logger.info("Loss: Cross Entropy")
 
-    # Setup learning rate scheduler with warmup
-    num_training_steps = (
-        len(train_loader) * config.EPOCHS // config.GRADIENT_ACCUMULATION_STEPS
-    )
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=config.WARMUP_STEPS,
-        num_training_steps=num_training_steps,
-    )
+    # Setup optimizer & scheduler
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
 
-    # Setup gradient scaler for mixed precision
+    num_training_steps = len(train_loader) * config.EPOCHS // config.GRADIENT_ACCUMULATION_STEPS
+    warmup_steps = int(num_training_steps * config.WARMUP_RATIO)
+    scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, num_training_steps)
+
     scaler = GradScaler() if config.USE_MIXED_PRECISION else None
 
-    # Training tracking
-    best_f1 = 0.0
-    training_history = {"train": [], "val": [], "test": None}
-    start_epoch = 1
-
-    # Check for existing checkpoint to resume from
-    resume_checkpoint = None
-
-    # First check if best model exists (training complete)
-    if os.path.exists(config.MODEL_SAVE_PATH):
-        resume_checkpoint = config.MODEL_SAVE_PATH
-        start_epoch = config.EPOCHS + 1  # Mark as complete
-    else:
-        # Check for epoch checkpoints
-        for epoch_num in range(config.EPOCHS, 0, -1):
-            checkpoint_path = os.path.join(
-                config.CHECKPOINT_DIR, f"graphcodebert_lora_epoch_{epoch_num}.pt"
-            )
-            if os.path.exists(checkpoint_path):
-                resume_checkpoint = checkpoint_path
-                start_epoch = epoch_num + 1
-                break
-
-    # Resume from checkpoint if found
-    if resume_checkpoint and start_epoch <= config.EPOCHS:
-        print("\n" + "=" * 70)
-        print(f"RESUMING FROM CHECKPOINT: {resume_checkpoint}")
-        print("=" * 70)
-        checkpoint = torch.load(resume_checkpoint, weights_only=False)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        best_f1 = checkpoint.get("best_f1", 0.0)
-        training_history = checkpoint.get(
-            "training_history", {"train": [], "val": [], "test": None}
-        )
-        print(f"✓ Resumed from epoch {start_epoch - 1}")
-        print(f"✓ Best F1 so far: {best_f1:.4f}")
-        print(f"✓ Continuing from epoch {start_epoch}")
-    elif resume_checkpoint:
-        print("\n" + "=" * 70)
-        print("TRAINING ALREADY COMPLETE")
-        print("=" * 70)
-        print(f"✓ All {config.EPOCHS} epochs already trained")
-        print(f"✓ Loading final model for evaluation")
-        checkpoint = torch.load(config.MODEL_SAVE_PATH, weights_only=False)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        best_f1 = checkpoint.get("best_f1", 0.0)
-        start_epoch = config.EPOCHS + 1  # Skip training loop
-
-    print("\n" + "=" * 70)
-    print("STARTING TRAINING" if start_epoch <= config.EPOCHS else "TRAINING SKIPPED")
-    print("=" * 70)
+    logger.info(f"\nTraining steps: {num_training_steps}")
+    logger.info(f"Warmup steps: {warmup_steps}")
 
     # Training loop
-    epoch_times = []
-    for epoch in range(start_epoch, config.EPOCHS + 1):
+    best_f1 = 0.0
+    patience = 0
+    history = {"train": [], "val": [], "test": None}
+
+    logger.info("\n" + "=" * 70)
+    logger.info("STARTING TRAINING")
+    logger.info("=" * 70)
+
+    for epoch in range(1, config.EPOCHS + 1):
         epoch_start = time.time()
 
-        print(f"\n{'='*70}")
-        print(f"EPOCH {epoch}/{config.EPOCHS}")
-        print(f"{'='*70}")
-
         # Train
-        train_metrics = train_epoch(
-            model, train_loader, optimizer, scheduler, scaler, config, epoch
-        )
-        training_history["train"].append(train_metrics)
+        train_metrics = train_epoch(model, train_loader, optimizer, scheduler, scaler, criterion, config, logger, epoch)
+        history["train"].append(train_metrics)
 
-        epoch_time = time.time() - epoch_start
-        epoch_times.append(epoch_time)
+        logger.info(f"\nTrain - Loss: {train_metrics['loss']:.4f}, F1: {train_metrics['f1']:.4f}, Acc: {train_metrics['accuracy']:.4f}")
 
-        print(f"\n📊 Train Metrics:")
-        print(f"  - Loss: {train_metrics['loss']:.4f}")
-        print(f"  - Accuracy: {train_metrics['accuracy']:.4f}")
-        print(f"  - F1-Score: {train_metrics['f1']:.4f}")
-        print(f"  - Precision: {train_metrics['precision']:.4f}")
-        print(f"  - Recall: {train_metrics['recall']:.4f}")
+        # Validate
+        val_metrics = evaluate(model, val_loader, criterion, config, logger, "val")
+        history["val"].append(val_metrics)
 
-        # Validate with error handling
-        try:
-            val_metrics = evaluate(model, val_loader, config, "validation")
-            training_history["val"].append(val_metrics)
+        logger.info(f"Val - Loss: {val_metrics['loss']:.4f}, F1: {val_metrics['f1']:.4f}, Acc: {val_metrics['accuracy']:.4f}")
+        logger.info(f"Epoch time: {time.time() - epoch_start:.1f}s")
 
-            print(f"\n📊 Validation Metrics:")
-            print(f"  - Loss: {val_metrics['loss']:.4f}")
-            print(f"  - Accuracy: {val_metrics['accuracy']:.4f}")
-            print(f"  - F1-Score: {val_metrics['f1']:.4f}")
-            print(f"  - Precision: {val_metrics['precision']:.4f}")
-            print(f"  - Recall: {val_metrics['recall']:.4f}")
-        except Exception as e:
-            print(f"\n⚠️ Validation failed with error: {str(e)[:200]}")
-            print("   Using training metrics as proxy for validation")
-            val_metrics = train_metrics.copy()
-            training_history["val"].append(val_metrics)
-
-        # Save best model
-        if config.SAVE_BEST_MODEL and val_metrics["f1"] > best_f1:
+        # Early stopping
+        if (val_metrics["f1"] - best_f1) > config.EARLY_STOPPING_MIN_DELTA:
             best_f1 = val_metrics["f1"]
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "best_f1": best_f1,
-                    "config": config.__dict__,
-                },
-                config.MODEL_SAVE_PATH,
-            )
-            print(f"\n✓ Best model saved! (F1: {best_f1:.4f})")
+            patience = 0
+            model.save_pretrained(config.CHECKPOINT_DIR)
+            logger.info(f"✓ Best model saved (F1: {best_f1:.4f})")
+        else:
+            patience += 1
+            logger.info(f"Patience: {patience}/{config.EARLY_STOPPING_PATIENCE}")
 
-        # Save epoch checkpoint for resume capability
-        epoch_checkpoint_path = os.path.join(
-            config.CHECKPOINT_DIR, f"graphcodebert_lora_epoch_{epoch}.pt"
-        )
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "best_f1": best_f1,
-                "training_history": training_history,
-                "config": config.__dict__,
-            },
-            epoch_checkpoint_path,
-        )
-        print(f"✓ Epoch {epoch} checkpoint saved: {epoch_checkpoint_path}")
+        if patience >= config.EARLY_STOPPING_PATIENCE:
+            logger.info("\nEarly stopping triggered")
+            break
 
-    # Load best model for final evaluation
-    if config.SAVE_BEST_MODEL:
-        print(f"\n{'='*70}")
-        print("LOADING BEST MODEL FOR FINAL EVALUATION")
-        print(f"{'='*70}")
-        checkpoint = torch.load(config.MODEL_SAVE_PATH, weights_only=False)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        print(
-            f"✓ Loaded model from epoch {checkpoint['epoch']} (F1: {checkpoint['best_f1']:.4f})"
-        )
+    # Load best model
+    logger.info("\n" + "=" * 70)
+    logger.info("LOADING BEST MODEL")
+    logger.info("=" * 70)
+    model = PeftModel.from_pretrained(model.base_model.model, config.CHECKPOINT_DIR).to(config.DEVICE)
 
-    # Final test evaluation
-    print(f"\n{'='*70}")
-    print("FINAL TEST EVALUATION")
-    print(f"{'='*70}")
+    # Test evaluation
+    logger.info("\n" + "=" * 70)
+    logger.info("TEST EVALUATION")
+    logger.info("=" * 70)
+    test_metrics = evaluate(model, test_loader, criterion, config, logger, "test")
+    preds, labels = test_metrics["predictions"], test_metrics["labels"]
+    history["test"] = {k: v for k, v in test_metrics.items() if k not in ["predictions", "labels"]}
 
+    logger.info(f"\nTest - Loss: {test_metrics['loss']:.4f}")
+    logger.info(f"Test - Accuracy: {test_metrics['accuracy']:.4f}")
+    logger.info(f"Test - F1: {test_metrics['f1']:.4f}")
+    logger.info(f"Test - Precision: {test_metrics['precision']:.4f}")
+    logger.info(f"Test - Recall: {test_metrics['recall']:.4f}")
+
+    # Language-wise F1 analysis
     try:
-        test_metrics = evaluate(model, test_loader, config, "test")
-        training_history["test"] = test_metrics
-
-        print(f"\n📊 Test Metrics:")
-        print(f"  - Loss: {test_metrics['loss']:.4f}")
-        print(f"  - Accuracy: {test_metrics['accuracy']:.4f}")
-        print(f"  - F1-Score: {test_metrics['f1']:.4f}")
-        print(f"  - Precision: {test_metrics['precision']:.4f}")
-        print(f"  - Recall: {test_metrics['recall']:.4f}")
+        test_data = torch.load(os.path.join(config.DATA_PATH, "test_tokenized_graphcodebert-base.pt"), map_location="cpu")
+        if "language" in test_data:
+            import pandas as pd
+            languages = test_data["language"].tolist()
+            df = pd.DataFrame({"lang": languages, "pred": preds, "label": labels})
+            per_lang = []
+            for lang, group in df.groupby("lang"):
+                f1 = f1_score(group["label"], group["pred"], average="binary", zero_division=0)
+                acc = accuracy_score(group["label"], group["pred"])
+                per_lang.append({"language": lang, "f1": f1, "accuracy": acc, "count": len(group)})
+            logger.info("\n📊 Language-wise F1 Scores:")
+            for row in per_lang:
+                logger.info(f"  {row['language']:<10s} → F1={row['f1']:.4f}, Acc={row['accuracy']:.4f}, N={row['count']}")
+            with open(os.path.join(config.METRICS_DIR, "language_wise_f1.json"), "w") as f:
+                json.dump(per_lang, f, indent=2)
+            logger.info("✓ Saved language-wise metrics to metrics_graphcodebert/language_wise_f1.json")
+        else:
+            logger.info("Language field not found — skipping per-language metrics.")
     except Exception as e:
-        print(f"\n⚠️ Test evaluation failed with error: {str(e)[:200]}")
-        print("   Using best validation metrics as proxy")
-        test_metrics = training_history["val"][-1].copy()
-        training_history["test"] = test_metrics
+        logger.warning(f"Language-wise F1 logging skipped: {e}")
+
+    # Save final model
+    model.save_pretrained(config.FINAL_MODEL_DIR)
+    logger.info(f"\n✓ Final model: {config.FINAL_MODEL_DIR}")
+
+    # Merge LoRA adapters
+    logger.info("\n" + "=" * 70)
+    logger.info("MERGING LORA ADAPTERS")
+    logger.info("=" * 70)
+    try:
+        from transformers import AutoModelForSequenceClassification
+        base_model = AutoModelForSequenceClassification.from_pretrained(config.MODEL_NAME, num_labels=config.NUM_LABELS)
+        merged_model = PeftModel.from_pretrained(base_model, config.FINAL_MODEL_DIR)
+        merged_model = merged_model.merge_and_unload()
+
+        os.makedirs(config.MERGED_MODEL_DIR, exist_ok=True)
+        merged_model.save_pretrained(config.MERGED_MODEL_DIR)
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(config.MODEL_NAME)
+        tokenizer.save_pretrained(config.MERGED_MODEL_DIR)
+
+        logger.info(f"✓ Merged model: {config.MERGED_MODEL_DIR}")
+    except Exception as e:
+        logger.warning(f"Merge failed: {e}")
 
     # Save metrics
     metrics_path = os.path.join(config.METRICS_DIR, "results.json")
@@ -862,72 +632,43 @@ def train(config: Config):
         logger.warning(f"HF Hub upload skipped: {e}")
 
     # Cleanup
-    print(f"\n{'='*70}")
-    print("CLEANING UP GPU MEMORY")
-    print(f"{'='*70}")
     del model
-    del optimizer
-    if scaler:
-        del scaler
     torch.cuda.empty_cache()
     gc.collect()
-    print("✓ GPU memory cleaned")
 
-    print(f"\n{'='*70}")
-    print("TRAINING COMPLETE!")
-    print(f"{'='*70}")
-    print(f"✓ Best Validation F1: {best_f1:.4f}")
-    print(f"✓ Test F1: {test_metrics['f1']:.4f}")
-    print(f"✓ Model saved: {config.MODEL_SAVE_PATH}")
-    print(f"✓ Metrics saved: {config.METRICS_SAVE_PATH}")
-
-    # Training summary
     total_time = time.time() - start_time
-    avg_epoch_time = sum(epoch_times) / len(epoch_times) if epoch_times else 0
-
-    print(f"\n{'='*70}")
-    print("TRAINING SUMMARY")
-    print(f"{'='*70}")
-    print(f"⏱  Total Runtime: {total_time/60:.2f} minutes ({total_time:.1f} seconds)")
-    print(
-        f"⏱  Avg Time per Epoch: {avg_epoch_time/60:.2f} minutes ({avg_epoch_time:.1f} seconds)"
-    )
-
-    if torch.cuda.is_available():
-        memory_allocated = torch.cuda.memory_allocated(0) / 1e9
-        memory_reserved = torch.cuda.memory_reserved(0) / 1e9
-        print(f"💾 GPU Memory:")
-        print(f"  - Allocated: {memory_allocated:.2f} GB")
-        print(f"  - Reserved: {memory_reserved:.2f} GB")
-
-    print(f"\n📊 Final Performance:")
-    print(f"  - Best Val F1: {best_f1:.4f}")
-    print(f"  - Test Accuracy: {test_metrics['accuracy']:.4f}")
-    print(f"  - Test F1: {test_metrics['f1']:.4f}")
-    print(f"  - Test Precision: {test_metrics['precision']:.4f}")
-    print(f"  - Test Recall: {test_metrics['recall']:.4f}")
-
+    logger.info("\n" + "=" * 70)
+    logger.info("TRAINING COMPLETE")
+    logger.info("=" * 70)
+    logger.info(f"✓ Best Val F1: {best_f1:.4f}")
+    logger.info(f"✓ Test F1: {test_metrics['f1']:.4f}")
+    logger.info(f"✓ Total runtime: {total_time/60:.2f} mins")
 
 # ============================================================================
 # ENTRY POINT
 # ============================================================================
 
-if __name__ == "__main__":
-    # Initialize configuration
+def main():
+    parser = argparse.ArgumentParser(description="Fine-tune GraphCodeBERT with LoRA")
+    parser.add_argument("--epochs", type=int, default=3, help="Number of epochs")
+    parser.add_argument("--batch_size", type=int, default=4, help="Training batch size")
+    parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
+    args = parser.parse_args()
+
     config = Config()
+    config.EPOCHS = args.epochs
+    config.TRAIN_BATCH_SIZE = args.batch_size
+    config.LEARNING_RATE = args.lr
+
+    logger = setup_logging(config.LOG_DIR)
 
     try:
-        # Run training
-        train(config)
-
+        train(config, logger)
     except Exception as e:
-        print(f"\n❌ ERROR: {str(e)}")
+        logger.error(f"Training failed: {e}")
         import traceback
-
         traceback.print_exc()
-
-        # Cleanup on error
-        torch.cuda.empty_cache()
-        gc.collect()
-
         raise
+
+if __name__ == "__main__":
+    main()
