@@ -34,7 +34,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
-from torch.cuda.amp import autocast, GradScaler
+from torch import amp
 from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 from peft import LoraConfig, get_peft_model, PeftModel
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, classification_report, confusion_matrix
@@ -352,7 +352,7 @@ def train_epoch(
         labels = batch[2].to(config.DEVICE)
 
         if config.USE_MIXED_PRECISION:
-            with autocast(dtype=config.PRECISION_DTYPE):
+            with amp.autocast("cuda", dtype=config.PRECISION_DTYPE):
                 logits = model(input_ids=input_ids, attention_mask=attention_mask)
                 loss = criterion(logits, labels) / config.GRADIENT_ACCUMULATION_STEPS
 
@@ -383,6 +383,16 @@ def train_epoch(
 
         progress_bar.set_postfix({"loss": f"{total_loss/(batch_idx+1):.4f}"})
 
+        # Live progress logging every 5% of epoch
+        if (batch_idx + 1) % max(1, len(train_loader) // 20) == 0:
+            step_loss = total_loss / (batch_idx + 1)
+            step_preds = np.array(all_preds)
+            step_labels = np.array(all_labels)
+            acc = accuracy_score(step_labels, step_preds)
+            f1 = f1_score(step_labels, step_preds, average="binary", zero_division=0)
+            progress_pct = 100 * (batch_idx + 1) / len(train_loader)
+            logger.info(f"  [Epoch {epoch}] Progress {progress_pct:.1f}% | Loss={step_loss:.4f} | Acc={acc:.4f} | F1={f1:.4f}")
+
     metrics = calculate_metrics(np.array(all_preds), np.array(all_labels))
     metrics["loss"] = total_loss / len(train_loader)
     return metrics
@@ -403,7 +413,7 @@ def evaluate(
             labels = batch[2].to(config.DEVICE)
 
             if config.USE_MIXED_PRECISION:
-                with autocast(dtype=config.PRECISION_DTYPE):
+                with amp.autocast("cuda", dtype=config.PRECISION_DTYPE):
                     logits = model(input_ids=input_ids, attention_mask=attention_mask)
                     loss = criterion(logits, labels)
             else:
@@ -487,7 +497,7 @@ def train(config: Config, logger: logging.Logger):
     warmup_steps = int(num_training_steps * config.WARMUP_RATIO)
     scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, num_training_steps)
 
-    scaler = GradScaler() if config.USE_MIXED_PRECISION else None
+    scaler = amp.GradScaler("cuda") if config.USE_MIXED_PRECISION else None
 
     logger.info(f"\nTraining steps: {num_training_steps}")
     logger.info(f"Warmup steps: {warmup_steps}")
