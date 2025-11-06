@@ -916,7 +916,8 @@ def train(config: Config, logger: logging.Logger):
 
     # ⚡ Try torch.compile for additional speedup (PyTorch 2.0+)
     try:
-        model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
+        # Use "default" mode on T4/P100 to avoid max_autotune_gemm warnings
+        model = torch.compile(model, mode="default", fullgraph=False)
         logger.info("✓ torch.compile enabled (expect ~5-15% speedup after warmup)")
     except Exception as e:
         logger.warning(f"torch.compile disabled: {e}")
