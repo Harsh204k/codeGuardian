@@ -10,7 +10,7 @@ Optimized for Kaggle Free GPU (T4/P100) with mixed precision and early stopping.
 
 Features:
 - Pure-code training (no engineered features)
-- LoRA r=8, α=16, dropout=0.1
+- LoRA r=8, α=32, dropout=0.1
 - Mixed precision (BF16/FP16 auto-detect)
 - Weighted cross-entropy + optional Focal Loss
 - Early stopping on F1 score
@@ -86,7 +86,7 @@ class Config:
 
     # LoRA
     LORA_R = 8
-    LORA_ALPHA = 16
+    LORA_ALPHA = 32
     LORA_DROPOUT = 0.1
     LORA_TARGET_MODULES = ["query", "value"]
 
@@ -130,7 +130,7 @@ class Config:
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     USE_MIXED_PRECISION = True
     PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16
-    GRADIENT_CHECKPOINTING = True
+    GRADIENT_CHECKPOINTING = False
 
 # ============================================================================
 # LOGGING
