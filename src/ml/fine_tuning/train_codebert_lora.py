@@ -259,7 +259,7 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
     logger.info(f"Train batches: {len(train_loader)}")
     logger.info(f"Val batches: {len(val_loader)}")
     logger.info(f"Test batches: {len(test_loader)}")
-    
+
     # ⚡ ROOT FIX: Log actual DataLoader batch sizes to catch silent overrides
     logger.info(f"Actual train micro-batch size: {train_loader.batch_size}")
     logger.info(f"Actual eval micro-batch size: {val_loader.batch_size}")
@@ -981,7 +981,7 @@ def main():
     args = parser.parse_args()
 
     config = Config()
-    
+
     # Only override if explicitly provided via CLI
     if args.epochs is not None:
         config.EPOCHS = args.epochs
