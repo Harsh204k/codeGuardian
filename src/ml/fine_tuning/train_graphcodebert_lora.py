@@ -124,7 +124,7 @@ class Config:
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     USE_MIXED_PRECISION = True
     PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16
-    GRADIENT_CHECKPOINTING = True
+    GRADIENT_CHECKPOINTING = False
     NUM_WORKERS = 4  # Faster dataloading
 
 # ============================================================================
