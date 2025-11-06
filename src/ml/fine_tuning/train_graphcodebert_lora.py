@@ -86,13 +86,13 @@ class Config:
 
     # Training
     EPOCHS = 3
-    TRAIN_BATCH_SIZE = 4
+    TRAIN_BATCH_SIZE = 8
     EVAL_BATCH_SIZE = 8
     LEARNING_RATE = 3e-5
     WEIGHT_DECAY = 1e-2
     MAX_GRAD_NORM = 1.0
     WARMUP_RATIO = 0.05
-    GRADIENT_ACCUMULATION_STEPS = 4
+    GRADIENT_ACCUMULATION_STEPS = 2
 
     # Early stopping
     EARLY_STOPPING_PATIENCE = 2
@@ -227,7 +227,8 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
         shuffle=True,
         num_workers=config.NUM_WORKERS,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
+        prefetch_factor=8   # new
     )
     val_loader = DataLoader(
         val_dataset,
@@ -235,7 +236,8 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
         shuffle=False,
         num_workers=config.NUM_WORKERS,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
+        prefetch_factor=8   # new
     )
     test_loader = DataLoader(
         test_dataset,
@@ -243,7 +245,8 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
         shuffle=False,
         num_workers=config.NUM_WORKERS,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
+        prefetch_factor=8   # new
     )
 
     logger.info(f"Train batches: {len(train_loader)}")
