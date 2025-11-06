@@ -25,24 +25,27 @@ import json
 import time
 import logging
 import argparse
+import hashlib
 from typing import Dict, Tuple, Optional
 from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from torch.cuda.amp import autocast, GradScaler
-from transformers import AutoModel, get_linear_schedule_with_warmup
+from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 from peft import LoraConfig, get_peft_model, PeftModel
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, classification_report, confusion_matrix
 from tqdm import tqdm
 
 # Reproducibility
-torch.manual_seed(42)
-np.random.seed(42)
+SEED = 42
+torch.manual_seed(SEED)
+np.random.seed(SEED)
 if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(42)
+    torch.cuda.manual_seed_all(SEED)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -118,6 +121,13 @@ class Config:
 # ============================================================================
 # LOGGING
 # ============================================================================
+
+def generate_run_hash(config: 'Config') -> str:
+    """Generate reproducibility hash from training configuration"""
+    config_str = f"{config.MODEL_NAME}_{config.LORA_R}_{config.LORA_ALPHA}_" \
+                 f"{config.LEARNING_RATE}_{config.TRAIN_BATCH_SIZE}_{config.EPOCHS}_" \
+                 f"{SEED}_{config.USE_WEIGHTED_LOSS}_{config.USE_FOCAL_LOSS}"
+    return hashlib.md5(config_str.encode()).hexdigest()[:8]
 
 def setup_logging(log_dir: str) -> logging.Logger:
     """Setup logging to file and console"""
@@ -418,9 +428,16 @@ def train(config: Config, logger: logging.Logger):
     """Main training function"""
     start_time = time.time()
 
+    # Generate reproducibility hash
+    run_hash = generate_run_hash(config)
+    run_id = f"graphcodebert_lora_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{run_hash}"
+
     logger.info("=" * 70)
     logger.info("GRAPHCODEBERT LORA FINE-TUNING (PURE-CODE)")
     logger.info("=" * 70)
+    logger.info(f"Run ID: {run_id}")
+    logger.info(f"Reproducibility Hash: {run_hash}")
+    logger.info(f"Random Seed: {SEED}")
     logger.info(f"Device: {config.DEVICE}")
     logger.info(f"Precision: {'BFloat16' if config.PRECISION_DTYPE == torch.bfloat16 else 'Float16'}")
     logger.info(f"Batch size: {config.TRAIN_BATCH_SIZE} (effective: {config.TRAIN_BATCH_SIZE * config.GRADIENT_ACCUMULATION_STEPS})")
@@ -587,6 +604,71 @@ def train(config: Config, logger: logging.Logger):
         json.dump(history, f, indent=2, default=str)
     logger.info(f"✓ Metrics: {metrics_path}")
 
+    # Save run metadata with reproducibility info
+    metadata = {
+        "run_id": run_id,
+        "run_hash": run_hash,
+        "seed": SEED,
+        "timestamp": datetime.now().isoformat(),
+        "model": config.MODEL_NAME,
+        "lora_config": {
+            "r": config.LORA_R,
+            "alpha": config.LORA_ALPHA,
+            "dropout": config.LORA_DROPOUT,
+            "target_modules": config.LORA_TARGET_MODULES
+        },
+        "training": {
+            "epochs": config.EPOCHS,
+            "batch_size": config.TRAIN_BATCH_SIZE,
+            "learning_rate": config.LEARNING_RATE,
+            "weight_decay": config.WEIGHT_DECAY,
+            "gradient_accumulation": config.GRADIENT_ACCUMULATION_STEPS
+        },
+        "results": {
+            "best_val_f1": float(best_f1),
+            "test_f1": float(test_metrics['f1']),
+            "test_accuracy": float(test_metrics['accuracy']),
+            "test_precision": float(test_metrics['precision']),
+            "test_recall": float(test_metrics['recall'])
+        },
+        "device": str(config.DEVICE),
+        "precision": "BFloat16" if config.PRECISION_DTYPE == torch.bfloat16 else "Float16"
+    }
+
+    metadata_path = os.path.join(config.METRICS_DIR, "run_metadata.json")
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+    logger.info(f"✓ Run metadata: {metadata_path}")
+
+    # Optional: Upload to W&B or MLflow
+    try:
+        # Try Weights & Biases
+        import wandb
+        if wandb.run is not None:
+            wandb.log(metadata["results"])
+            wandb.log({"run_hash": run_hash})
+            logger.info("✓ Metrics logged to Weights & Biases")
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"W&B logging skipped: {e}")
+
+    try:
+        # Try MLflow
+        import mlflow
+        if mlflow.active_run():
+            mlflow.log_metrics(metadata["results"])
+            mlflow.log_params({
+                "run_hash": run_hash,
+                "model": config.MODEL_NAME,
+                "lora_r": config.LORA_R
+            })
+            logger.info("✓ Metrics logged to MLflow")
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"MLflow logging skipped: {e}")
+
     # Classification report
     cm = confusion_matrix(labels, preds)
     logger.info("\nConfusion Matrix:")
@@ -601,6 +683,49 @@ def train(config: Config, logger: logging.Logger):
     os.system("cp -r /kaggle/working/checkpoints_graphcodebert /kaggle/working/checkpoints_output_graphcodebert || true")
     os.system("cp -r /kaggle/working/graphcodebert_lora_merged /kaggle/working/graphcodebert_lora_merged || true")
     logger.info("✓ Copied outputs to visible Kaggle directories")
+
+    # Export Trainer-compatible format for HuggingFace integration
+    try:
+        from transformers import TrainingArguments, AutoModelForSequenceClassification
+
+        trainer_export_dir = f"{config.OUTPUT_DIR}/graphcodebert_trainer_export"
+        os.makedirs(trainer_export_dir, exist_ok=True)
+
+        # Save model in Trainer format
+        merged_model = AutoModelForSequenceClassification.from_pretrained(config.MERGED_MODEL_DIR)
+        merged_model.save_pretrained(trainer_export_dir)
+
+        # Save tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(config.MODEL_NAME)
+        tokenizer.save_pretrained(trainer_export_dir)
+
+        # Save training arguments template
+        training_args_dict = {
+            "output_dir": trainer_export_dir,
+            "num_train_epochs": config.EPOCHS,
+            "per_device_train_batch_size": config.TRAIN_BATCH_SIZE,
+            "per_device_eval_batch_size": config.EVAL_BATCH_SIZE,
+            "learning_rate": config.LEARNING_RATE,
+            "weight_decay": config.WEIGHT_DECAY,
+            "warmup_ratio": config.WARMUP_RATIO,
+            "fp16": not BF16_SUPPORTED,
+            "bf16": BF16_SUPPORTED,
+            "gradient_accumulation_steps": config.GRADIENT_ACCUMULATION_STEPS,
+            "max_grad_norm": config.MAX_GRAD_NORM,
+            "save_strategy": "epoch",
+            "evaluation_strategy": "epoch",
+            "load_best_model_at_end": True,
+            "metric_for_best_model": "f1",
+            "run_name": run_id
+        }
+
+        with open(os.path.join(trainer_export_dir, "training_args.json"), "w") as f:
+            json.dump(training_args_dict, f, indent=2)
+
+        logger.info(f"✓ Trainer-compatible export: {trainer_export_dir}")
+        logger.info("  → Use with: from transformers import Trainer, AutoModelForSequenceClassification")
+    except Exception as e:
+        logger.warning(f"Trainer export skipped: {e}")
 
     # Hugging Face Hub Upload (Optional)
     try:
