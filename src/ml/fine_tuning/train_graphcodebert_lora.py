@@ -74,10 +74,10 @@ class Config:
     NUM_LABELS = 2
 
     # LoRA
-    LORA_R = 8
-    LORA_ALPHA = 16
+    LORA_R = 16
+    LORA_ALPHA = 32
     LORA_DROPOUT = 0.1
-    LORA_TARGET_MODULES = ["query", "value"]
+    LORA_TARGET_MODULES = ["query", "key", "value"]
 
     # Training
     EPOCHS = 3
