@@ -94,13 +94,13 @@ class Config:
 
     # Training
     EPOCHS = 3
-    TRAIN_BATCH_SIZE = 4
-    EVAL_BATCH_SIZE = 8
+    TRAIN_BATCH_SIZE = 8
+    EVAL_BATCH_SIZE = 32  # ⚡ ROOT FIX: Larger eval batch (pure inference, no gradients)
     LEARNING_RATE = 3e-5
     WEIGHT_DECAY = 1e-2
     MAX_GRAD_NORM = 1.0
     WARMUP_RATIO = 0.05
-    GRADIENT_ACCUMULATION_STEPS = 4
+    GRADIENT_ACCUMULATION_STEPS = 2
 
     # Early stopping
     EARLY_STOPPING_PATIENCE = 2
@@ -259,6 +259,11 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
     logger.info(f"Train batches: {len(train_loader)}")
     logger.info(f"Val batches: {len(val_loader)}")
     logger.info(f"Test batches: {len(test_loader)}")
+    
+    # ⚡ ROOT FIX: Log actual DataLoader batch sizes to catch silent overrides
+    logger.info(f"Actual train micro-batch size: {train_loader.batch_size}")
+    logger.info(f"Actual eval micro-batch size: {val_loader.batch_size}")
+    logger.info(f"Iterations per epoch: {len(train_loader):,}")
 
     return train_loader, val_loader, test_loader
 
@@ -440,9 +445,10 @@ def train_epoch(
     optimizer.zero_grad()
 
     for batch_idx, batch in enumerate(progress_bar):
-        input_ids = batch[0].to(config.DEVICE)
-        attention_mask = batch[1].to(config.DEVICE)
-        labels = batch[2].to(config.DEVICE)
+        # ⚡ ROOT FIX: Non-blocking H→D copy (overlap with GPU compute)
+        input_ids = batch[0].to(config.DEVICE, non_blocking=True)
+        attention_mask = batch[1].to(config.DEVICE, non_blocking=True)
+        labels = batch[2].to(config.DEVICE, non_blocking=True)
 
         if config.USE_MIXED_PRECISION:
             with amp.autocast("cuda", dtype=config.PRECISION_DTYPE):
@@ -505,9 +511,10 @@ def evaluate(
 
     with torch.no_grad():
         for batch in tqdm(data_loader, desc=f"{split_name.upper()}"):
-            input_ids = batch[0].to(config.DEVICE)
-            attention_mask = batch[1].to(config.DEVICE)
-            labels = batch[2].to(config.DEVICE)
+            # ⚡ ROOT FIX: Non-blocking H→D copy
+            input_ids = batch[0].to(config.DEVICE, non_blocking=True)
+            attention_mask = batch[1].to(config.DEVICE, non_blocking=True)
+            labels = batch[2].to(config.DEVICE, non_blocking=True)
 
             if config.USE_MIXED_PRECISION:
                 with amp.autocast("cuda", dtype=config.PRECISION_DTYPE):
@@ -967,15 +974,21 @@ def train(config: Config, logger: logging.Logger):
 
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune CodeBERT with LoRA (Production v3)")
-    parser.add_argument("--epochs", type=int, default=3, help="Number of epochs")
-    parser.add_argument("--batch_size", type=int, default=4, help="Training batch size")
-    parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
+    # ⚡ ROOT FIX: Use None as default to avoid silent config overrides
+    parser.add_argument("--epochs", type=int, default=None, help="Number of epochs")
+    parser.add_argument("--batch_size", type=int, default=None, help="Training batch size")
+    parser.add_argument("--lr", type=float, default=None, help="Learning rate")
     args = parser.parse_args()
 
     config = Config()
-    config.EPOCHS = args.epochs
-    config.TRAIN_BATCH_SIZE = args.batch_size
-    config.LEARNING_RATE = args.lr
+    
+    # Only override if explicitly provided via CLI
+    if args.epochs is not None:
+        config.EPOCHS = args.epochs
+    if args.batch_size is not None:
+        config.TRAIN_BATCH_SIZE = args.batch_size
+    if args.lr is not None:
+        config.LEARNING_RATE = args.lr
 
     logger = setup_logging(config.LOG_DIR)
 
