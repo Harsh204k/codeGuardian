@@ -58,9 +58,14 @@ np.random.seed(SEED)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(SEED)
     torch.backends.cudnn.deterministic = True
-    # ⚡ ROOT FIX: Enable cudnn benchmark for fixed seq lengths (512 tokens)
-    # Allows kernel caching → 20-25% throughput boost
-    torch.backends.cudnn.benchmark = True
+    # ⚡ Enable TF32 for Ampere+ GPUs (no-op on older GPUs, safe to enable)
+    try:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    except Exception:
+        pass
+    # ⚡ Disable cudnn.benchmark for transformers (it's a CNN optimization, useless here)
+    torch.backends.cudnn.benchmark = False
 
 # ============================================================================
 # GPU DETECTION
@@ -94,13 +99,13 @@ class Config:
 
     # Training
     EPOCHS = 3
-    TRAIN_BATCH_SIZE = 8
-    EVAL_BATCH_SIZE = 32  # ⚡ ROOT FIX: Larger eval batch (pure inference, no gradients)
+    TRAIN_BATCH_SIZE = 8  # Will be autotuned during training
+    EVAL_BATCH_SIZE = 64  # ⚡ Larger eval batch (pure inference, no gradients)
     LEARNING_RATE = 3e-5
     WEIGHT_DECAY = 1e-2
     MAX_GRAD_NORM = 1.0
     WARMUP_RATIO = 0.05
-    GRADIENT_ACCUMULATION_STEPS = 2
+    GRADIENT_ACCUMULATION_STEPS = 2  # May be reduced if autotuned batch size is large
 
     # Early stopping
     EARLY_STOPPING_PATIENCE = 2
@@ -135,7 +140,7 @@ class Config:
     USE_MIXED_PRECISION = True
     PRECISION_DTYPE = torch.bfloat16 if BF16_SUPPORTED else torch.float16
     GRADIENT_CHECKPOINTING = False
-    NUM_WORKERS = 4  # Faster dataloading
+    NUM_WORKERS = 0  # ⚡ Critical on Kaggle for TensorDataset (no CPU preprocessing needed)
 
 # ============================================================================
 # LOGGING
@@ -237,7 +242,7 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
         shuffle=True,
         num_workers=config.NUM_WORKERS,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=False  # ⚡ Avoid worker lingering overhead on TensorDataset
     )
     val_loader = DataLoader(
         val_dataset,
@@ -245,7 +250,7 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
         shuffle=False,
         num_workers=config.NUM_WORKERS,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=False
     )
     test_loader = DataLoader(
         test_dataset,
@@ -253,7 +258,7 @@ def create_dataloaders(config: Config, logger: logging.Logger) -> Tuple[DataLoad
         shuffle=False,
         num_workers=config.NUM_WORKERS,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=False
     )
 
     logger.info(f"Train batches: {len(train_loader)}")
@@ -348,6 +353,66 @@ def initialize_model(config: Config, logger: logging.Logger) -> nn.Module:
     logger.info(f"Memory reduction: {100*(1-trainable_after/total_params):.1f}%")
 
     return model.to(config.DEVICE)
+
+# ============================================================================
+# BATCH SIZE AUTOTUNING
+# ============================================================================
+
+def autotune_batch_size(model, config: Config, sample_batch, logger: logging.Logger) -> int:
+    """
+    Automatically find the largest batch size that fits in GPU memory.
+
+    Tests progressively larger batch sizes until OOM, then returns the largest successful size.
+    This is safe because the backbone is frozen, leaving plenty of memory headroom.
+    """
+    logger.info("\n" + "=" * 70)
+    logger.info("AUTOTUNING BATCH SIZE")
+    logger.info("=" * 70)
+
+    model.eval()  # Use eval mode for memory testing (no gradients)
+    original_bs = config.TRAIN_BATCH_SIZE
+    candidate = original_bs
+
+    # Test batch sizes: 16, 24, 32, 40, 48, 56, 64
+    test_sizes = [16, 24, 32, 40, 48, 56, 64]
+
+    for test_bs in test_sizes:
+        try:
+            # Extract a batch of the target size
+            input_ids = sample_batch[0][:test_bs].to(config.DEVICE, non_blocking=True)
+            attention_mask = sample_batch[1][:test_bs].to(config.DEVICE, non_blocking=True)
+
+            # Test forward pass with mixed precision
+            with torch.no_grad():
+                if config.USE_MIXED_PRECISION:
+                    with amp.autocast("cuda", dtype=config.PRECISION_DTYPE):
+                        _ = model(input_ids=input_ids, attention_mask=attention_mask)
+                else:
+                    _ = model(input_ids=input_ids, attention_mask=attention_mask)
+
+            candidate = test_bs
+            logger.info(f"  ✓ Batch size {test_bs} fits")
+
+            # Clear memory for next test
+            torch.cuda.empty_cache()
+
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                logger.info(f"  ✗ Batch size {test_bs} OOM - stopping")
+                torch.cuda.empty_cache()
+                break
+            else:
+                # Some other error, re-raise it
+                raise
+
+    model.train()  # Restore training mode
+
+    logger.info(f"\n🎯 Optimal batch size: {candidate} (tested up to {test_sizes[-1]})")
+
+    if candidate > original_bs:
+        logger.info(f"⚡ Speedup factor: ~{candidate/original_bs:.1f}x")
+
+    return candidate
 
 # ============================================================================
 # CHECKPOINT MANAGEMENT
@@ -482,14 +547,14 @@ def train_epoch(
 
         progress_bar.set_postfix({"loss": f"{total_loss/(batch_idx+1):.4f}"})
 
-        # ⚡ ROOT FIX: Reduce logging frequency to avoid CPU GIL stalls
+        # ⚡ Reduce logging frequency to avoid CPU GIL stalls
         # Log every 5000 steps instead of every 5% (6000+ calls/epoch → 10 calls/epoch)
         if (batch_idx + 1) % 5000 == 0:
             step_loss = total_loss / (batch_idx + 1)
-            # Use tensor operations (no numpy conversion) for speed
-            step_preds_tensor = torch.tensor(all_preds[-5000:], device=config.DEVICE)
-            step_labels_tensor = torch.tensor(all_labels[-5000:], device=config.DEVICE)
-            acc = (step_preds_tensor == step_labels_tensor).float().mean().item()
+            # ⚡ Use pure NumPy to avoid GPU→CPU sync penalty
+            tail_p = np.array(all_preds[-5000:], dtype=np.int32)
+            tail_l = np.array(all_labels[-5000:], dtype=np.int32)
+            acc = float((tail_p == tail_l).mean())
             logger.info(f"  [Epoch {epoch}] Step {batch_idx+1}/{len(train_loader)} | Loss={step_loss:.4f} | Acc={acc:.4f}")
 
     # Clear memory after epoch
@@ -767,8 +832,20 @@ def train(config: Config, logger: logging.Logger):
     for dir_path in [config.CHECKPOINT_DIR, config.METRICS_DIR, config.LOG_DIR]:
         os.makedirs(dir_path, exist_ok=True)
 
-    # Load data
-    train_loader, val_loader, test_loader = create_dataloaders(config, logger)
+    # Load datasets (temporarily with initial batch sizes)
+    logger.info("=" * 70)
+    logger.info("LOADING DATASETS")
+    logger.info("=" * 70)
+
+    train_dataset = load_tokenized_dataset(
+        os.path.join(config.DATA_PATH, "train_tokenized_codebert-base.pt"), logger
+    )
+    val_dataset = load_tokenized_dataset(
+        os.path.join(config.DATA_PATH, "val_tokenized_codebert-base.pt"), logger
+    )
+    test_dataset = load_tokenized_dataset(
+        os.path.join(config.DATA_PATH, "test_tokenized_codebert-base.pt"), logger
+    )
 
     # Compute class weights
     logger.info("\nComputing class weights...")
@@ -776,8 +853,73 @@ def train(config: Config, logger: logging.Logger):
     class_weights = compute_class_weights(train_data["labels"], config.DEVICE)
     logger.info(f"Class weights: {class_weights.tolist()}")
 
-    # Initialize model
+    # Initialize model (needed for batch size autotuning)
     model = initialize_model(config, logger)
+
+    # ⚡ Autotune batch size before creating dataloaders
+    if torch.cuda.is_available():
+        # Create a small probe loader to get a sample batch
+        probe_loader = DataLoader(train_dataset, batch_size=64, shuffle=False, num_workers=0, pin_memory=True)
+        sample_batch = next(iter(probe_loader))
+        del probe_loader  # Clean up
+
+        # Find optimal batch size
+        optimal_bs = autotune_batch_size(model, config, sample_batch, logger)
+
+        # Update config
+        original_bs = config.TRAIN_BATCH_SIZE
+        config.TRAIN_BATCH_SIZE = optimal_bs
+
+        # Reduce gradient accumulation if batch size is large enough
+        if optimal_bs >= 32 and config.GRADIENT_ACCUMULATION_STEPS > 1:
+            config.GRADIENT_ACCUMULATION_STEPS = 1
+            logger.info(f"⚡ Reduced gradient accumulation to 1 (large batch size)")
+
+        # Scale up eval batch size (eval uses no gradients, can be much larger)
+        config.EVAL_BATCH_SIZE = max(2 * config.TRAIN_BATCH_SIZE, 64)
+
+        logger.info(f"📊 Final config: TRAIN_BS={config.TRAIN_BATCH_SIZE}, EVAL_BS={config.EVAL_BATCH_SIZE}, GA={config.GRADIENT_ACCUMULATION_STEPS}")
+        logger.info(f"📊 Effective batch size: {config.TRAIN_BATCH_SIZE * config.GRADIENT_ACCUMULATION_STEPS}")
+
+        torch.cuda.empty_cache()
+
+    # Now create dataloaders with optimized batch sizes
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.TRAIN_BATCH_SIZE,
+        shuffle=True,
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=False
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.EVAL_BATCH_SIZE,
+        shuffle=False,
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=False
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=config.EVAL_BATCH_SIZE,
+        shuffle=False,
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=False
+    )
+
+    logger.info(f"\n✓ Train batches: {len(train_loader):,}")
+    logger.info(f"✓ Val batches: {len(val_loader):,}")
+    logger.info(f"✓ Test batches: {len(test_loader):,}")
+    logger.info(f"✓ Iterations per epoch: {len(train_loader):,}")
+
+    # ⚡ Try torch.compile for additional speedup (PyTorch 2.0+)
+    try:
+        model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
+        logger.info("✓ torch.compile enabled (expect ~5-15% speedup after warmup)")
+    except Exception as e:
+        logger.warning(f"torch.compile disabled: {e}")
 
     # Setup loss
     if config.USE_FOCAL_LOSS:
@@ -791,7 +933,12 @@ def train(config: Config, logger: logging.Logger):
         logger.info("Loss: Cross Entropy")
 
     # Setup optimizer & scheduler
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=config.LEARNING_RATE,
+        weight_decay=config.WEIGHT_DECAY,
+        fused=True if torch.cuda.is_available() else False  # ⚡ 5-15% speedup on CUDA
+    )
 
     num_training_steps = len(train_loader) * config.EPOCHS // config.GRADIENT_ACCUMULATION_STEPS
     warmup_steps = int(num_training_steps * config.WARMUP_RATIO)
