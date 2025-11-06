@@ -10,7 +10,10 @@ Optimized for Kaggle Free GPU (T4/P100) with mixed precision and early stopping.
 
 Features:
 - Pure-code training (no engineered features)
-- LoRA r=8, α=16, dropout=0.1
+---- CHANGES :
+- LoRA r=16, α=32, dropout=0.1
+- LORA_TARGET_MODULES = ["query", "key", "value"]  # was ["query","value"]
+----
 - Mixed precision (BF16/FP16 auto-detect)
 - Weighted cross-entropy + optional Focal Loss
 - Early stopping on F1 score
