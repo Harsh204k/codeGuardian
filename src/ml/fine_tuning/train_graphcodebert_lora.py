@@ -34,7 +34,6 @@ import subprocess
 from typing import Dict, Tuple, Optional
 from pathlib import Path
 from datetime import datetime
-from contextlib import nullcontext
 
 import numpy as np
 import torch
@@ -443,15 +442,11 @@ def train_epoch(
         labels = batch[2].to(config.DEVICE)
 
         if config.USE_MIXED_PRECISION:
-            # ⚡ ROOT FIX: Use no_sync() to prevent redundant gradient syncs during accumulation
-            sync_context = nullcontext() if (batch_idx + 1) % config.GRADIENT_ACCUMULATION_STEPS == 0 else model.no_sync()
+            with amp.autocast("cuda", dtype=config.PRECISION_DTYPE):
+                logits = model(input_ids=input_ids, attention_mask=attention_mask)
+                loss = criterion(logits, labels) / config.GRADIENT_ACCUMULATION_STEPS
 
-            with sync_context:
-                with amp.autocast("cuda", dtype=config.PRECISION_DTYPE):
-                    logits = model(input_ids=input_ids, attention_mask=attention_mask)
-                    loss = criterion(logits, labels) / config.GRADIENT_ACCUMULATION_STEPS
-
-                scaler.scale(loss).backward()
+            scaler.scale(loss).backward()
 
             if (batch_idx + 1) % config.GRADIENT_ACCUMULATION_STEPS == 0:
                 scaler.unscale_(optimizer)
