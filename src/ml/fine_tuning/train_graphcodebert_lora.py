@@ -966,7 +966,7 @@ def train(config: Config, logger: logging.Logger):
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune GraphCodeBERT with LoRA (Production v3)")
     parser.add_argument("--epochs", type=int, default=3, help="Number of epochs")
-    parser.add_argument("--batch_size", type=int, default=4, help="Training batch size")
+    parser.add_argument("--batch_size", type=int, default=8, help="Training batch size")
     parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
     args = parser.parse_args()
 
