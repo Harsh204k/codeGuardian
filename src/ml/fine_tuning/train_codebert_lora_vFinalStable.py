@@ -146,7 +146,7 @@ BASE_DIR = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/tokenized/c
 OUTPUT_DIR = "/kaggle/working/lora_output_codebert"
 
 # Training hyperparameters
-EPOCHS = 3
+EPOCHS = 1
 BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 4
 LEARNING_RATE = 1e-4
