@@ -62,7 +62,7 @@ Pre-tokenized .pt files from tokenization pipeline:
 }
 
 Input Path:
-/kaggle/input/codeguardian-tokenized-dataset/tokenized/codebert-base/{split}_tokenized.pt
+/kaggle/input/codeguardian-dataset-for-model-fine-tuning/tokenized/codebert-base/{split}_tokenized_codebert-base.pt
 
 Output Structure:
 /kaggle/working/lora_output_codebert/
@@ -142,7 +142,7 @@ from collections import defaultdict
 
 SEED = 42
 MODEL_NAME = "microsoft/codebert-base"
-BASE_DIR = "/kaggle/input/codeguardian-tokenized-dataset/tokenized/codebert-base"
+BASE_DIR = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/tokenized/codebert-base"
 OUTPUT_DIR = "/kaggle/working/lora_output_codebert"
 
 # Training hyperparameters
@@ -410,9 +410,9 @@ def main():
 
     # Load datasets
     print("\n📂 Loading tokenized datasets...")
-    train_dataset = PreTokenizedDataset(f"{BASE_DIR}/train_tokenized.pt")
-    val_dataset = PreTokenizedDataset(f"{BASE_DIR}/val_tokenized.pt")
-    test_dataset = PreTokenizedDataset(f"{BASE_DIR}/test_tokenized.pt")
+    train_dataset = PreTokenizedDataset(f"{BASE_DIR}/train_tokenized_codebert-base.pt")
+    val_dataset = PreTokenizedDataset(f"{BASE_DIR}/val_tokenized_codebert-base.pt")
+    test_dataset = PreTokenizedDataset(f"{BASE_DIR}/test_tokenized_codebert-base.pt")
 
     print(f"   Train: {len(train_dataset):,} samples")
     print(f"   Val:   {len(val_dataset):,} samples")
