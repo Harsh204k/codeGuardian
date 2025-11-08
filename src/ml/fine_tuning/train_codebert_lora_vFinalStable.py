@@ -414,13 +414,13 @@ def main():
     val_dataset = PreTokenizedDataset(f"{BASE_DIR}/val_tokenized_codebert-base.pt")
     test_dataset = PreTokenizedDataset(f"{BASE_DIR}/test_tokenized_codebert-base.pt")
 
-    # ⚠️ TESTING MODE: Subset datasets for faster iteration
-    subset_size = 50000
-    print(f"\n⚠️  TESTING MODE: Using subset of {subset_size:,} samples")
-    train_dataset.data['input_ids'] = train_dataset.data['input_ids'][:subset_size]
-    train_dataset.data['attention_mask'] = train_dataset.data['attention_mask'][:subset_size]
-    train_dataset.data['labels'] = train_dataset.data['labels'][:subset_size]
-    train_dataset.data['language_ids'] = train_dataset.data['language_ids'][:subset_size]
+    # # ⚠️ TESTING MODE: Subset datasets for faster iteration
+    # subset_size = 50000
+    # print(f"\n⚠️  TESTING MODE: Using subset of {subset_size:,} samples")
+    # train_dataset.data['input_ids'] = train_dataset.data['input_ids'][:subset_size]
+    # train_dataset.data['attention_mask'] = train_dataset.data['attention_mask'][:subset_size]
+    # train_dataset.data['labels'] = train_dataset.data['labels'][:subset_size]
+    # train_dataset.data['language_ids'] = train_dataset.data['language_ids'][:subset_size]
 
     print(f"   Train: {len(train_dataset):,} samples")
     print(f"   Val:   {len(val_dataset):,} samples")
