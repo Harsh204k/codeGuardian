@@ -24,7 +24,7 @@ Features:
 ✅ Comprehensive epoch summaries (train/val metrics)
 ✅ Language-wise test evaluation with per-language F1/Accuracy
 ✅ Full reproducibility (seed=42, deterministic operations)
-✅ Structured output with checkpoints, metrics, and logs
+✅ Structured output with checkpoints, and metrics
 ✅ Memory-efficient validation and test loops
 
 Training Configuration:
@@ -74,13 +74,10 @@ Output Structure:
 ├── README_graphcodebert.md                 # Model documentation
 ├── checkpoints_graphcodebert/              # Epoch checkpoints
 │   └── epoch_graphcodebert_{n}.pt
-├── metrics_graphcodebert/                  # Evaluation metrics
-│   ├── results_graphcodebert.json          # Full results
-│   ├── language_wise_f1_graphcodebert.json # Per-language metrics
-│   └── confusion_matrix_graphcodebert.json # Confusion matrix
-└── logs/                                   # Training logs
-    ├── train_log_graphcodebert.txt
-    └── events_graphcodebert.txt
+└── metrics_graphcodebert/                  # Evaluation metrics
+    ├── results_graphcodebert.json          # Full results
+    ├── language_wise_f1_graphcodebert.json # Per-language metrics
+    └── confusion_matrix_graphcodebert.json # Confusion matrix
 
 Console Output Format:
 ======================== EPOCH 1/3 ========================
@@ -395,7 +392,6 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(f"{OUTPUT_DIR}/checkpoints_graphcodebert", exist_ok=True)
     os.makedirs(f"{OUTPUT_DIR}/metrics_graphcodebert", exist_ok=True)
-    os.makedirs(f"{OUTPUT_DIR}/logs", exist_ok=True)
 
     print("=" * 80)
     print("🚀 codeGuardian - GraphCodeBERT LoRA Fine-tuning")

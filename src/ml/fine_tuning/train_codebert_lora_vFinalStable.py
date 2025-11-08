@@ -24,7 +24,7 @@ Features:
 ✅ Comprehensive epoch summaries (train/val metrics)
 ✅ Language-wise test evaluation with per-language F1/Accuracy
 ✅ Full reproducibility (seed=42, deterministic operations)
-✅ Structured output with checkpoints, metrics, and logs
+✅ Structured output with checkpoints, and metrics
 ✅ Memory-efficient validation and test loops
 
 Training Configuration:
@@ -74,20 +74,19 @@ Output Structure:
 ├── README_codebert.md                 # Model documentation
 ├── checkpoints_codebert/              # Epoch checkpoints
 │   └── epoch_codebert_{n}.pt
-├── metrics_codebert/                  # Evaluation metrics
-│   ├── results_codebert.json          # Full results
-│   ├── language_wise_f1_codebert.json # Per-language metrics
-│   └── confusion_matrix_codebert.json # Confusion matrix
-└── logs/                              # Training logs
-    ├── train_log_codebert.txt
-    └── events_codebert.txt
+└── metrics_codebert/                  # Evaluation metrics
+    ├── results_codebert.json          # Full results
+    ├── language_wise_f1_codebert.json # Per-language metrics
+    └── confusion_matrix_codebert.json # Confusion matrix
 
 Console Output Format:
-======================== EPOCH 1/3 ========================
-Train → Loss=0.4256 | Acc=0.6074 | Prec=0.6132 | Rec=0.5789 | F1=0.5956
-Val   → Loss=0.4398 | Acc=0.6011 | Prec=0.6052 | Rec=0.5830 | F1=0.5939
-✓ Saved best checkpoint (val_F1=0.5939)
------------------------------------------------------------
+================================================================================
+EPOCH 1/2
+================================================================================
+Train → Loss=0.2167 | Acc=0.9432 | Prec=0.8861 | Rec=0.8264 | F1=0.8552
+Val   → Loss=0.1907 | Acc=0.9495 | Prec=0.8871 | Rec=0.8605 | F1=0.8736
+✓ Saved best checkpoint (val_F1=0.8736)
+--------------------------------------------------------------------------------
 
 🎯 FINAL TEST PERFORMANCE
 Acc=0.6058 | Prec=0.6121 | Rec=0.5859 | F1=0.5987
@@ -395,7 +394,6 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(f"{OUTPUT_DIR}/checkpoints_codebert", exist_ok=True)
     os.makedirs(f"{OUTPUT_DIR}/metrics_codebert", exist_ok=True)
-    os.makedirs(f"{OUTPUT_DIR}/logs", exist_ok=True)
 
     print("=" * 80)
     print("🚀 codeGuardian - CodeBERT LoRA Fine-tuning")
