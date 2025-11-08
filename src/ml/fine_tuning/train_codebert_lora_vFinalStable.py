@@ -466,7 +466,7 @@ def main():
     print(f"\n📊 Training steps: {total_steps:,} | Warmup: {warmup_steps:,}")
 
     # Enable mixed precision
-    scaler = torch.cuda.amp.GradScaler() if FP16 else None
+    scaler = torch.amp.GradScaler('cuda') if FP16 else None
 
     # Training loop
     best_val_f1 = 0
