@@ -37,7 +37,7 @@ Training Configuration:
 - Target modules: ["query", "value"]
 - Learning rate: 1e-4
 - Weight decay: 0.01
-- Epochs: 3
+- Epochs: 2
 - Batch size: 4 (effective: 16 with grad accumulation)
 - Gradient accumulation steps: 4
 - Warmup ratio: 0.05
@@ -146,7 +146,7 @@ BASE_DIR = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/tokenized/c
 OUTPUT_DIR = "/kaggle/working/lora_output_codebert"
 
 # Training hyperparameters
-EPOCHS = 1
+EPOCHS = 2
 BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 4
 LEARNING_RATE = 1e-4
@@ -259,7 +259,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, criterion, scaler, devi
         labels = batch['labels'].to(device)
 
         # Mixed precision forward pass
-        with torch.cuda.amp.autocast(enabled=FP16):
+        with torch.amp.autocast('cuda', enabled=FP16):
             outputs = model(input_ids=input_ids, attention_mask=attention_mask)
             logits = outputs.logits
             loss = criterion(logits, labels) / GRAD_ACCUM_STEPS
