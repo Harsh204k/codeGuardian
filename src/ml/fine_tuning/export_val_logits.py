@@ -72,11 +72,11 @@ OUTPUT_CSV_PATH = "/kaggle/working/val_logits.csv"
 CODEBERT_BASE = "microsoft/codebert-base"
 GRAPHCODEBERT_BASE = "microsoft/graphcodebert-base"
 
-CODEBERT_ADAPTER_DIR = "/kaggle/working/lora_output_codebert"
-GRAPHCODEBERT_ADAPTER_DIR = "/kaggle/working/lora_output_graphcodebert"
+CODEBERT_ADAPTER_DIR = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/fine-tuning/lora_output_codebert"
+GRAPHCODEBERT_ADAPTER_DIR = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/fine-tuning/lora_output_graphcodebert"
 
-CODEBERT_CHECKPOINT = "/kaggle/working/lora_output_codebert/checkpoints_codebert/epoch_codebert_1.pt"
-GRAPHCODEBERT_CHECKPOINT = "/kaggle/working/lora_output_graphcodebert/checkpoints_graphcodebert/epoch_graphcodebert_1.pt"
+CODEBERT_CHECKPOINT = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/fine-tuning/lora_output_codebert/checkpoints_codebert/epoch_codebert_1.pt"
+GRAPHCODEBERT_CHECKPOINT = "/kaggle/input/codeguardian-dataset-for-model-fine-tuning/fine-tuning/lora_output_graphcodebert/checkpoints_graphcodebert/epoch_graphcodebert_1.pt"
 
 # Inference settings
 BATCH_SIZE = 16
