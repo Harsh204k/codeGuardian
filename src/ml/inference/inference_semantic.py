@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================
-# codeGuardian Semantic Inference Module - Production Version
+# codeGuardian Semantic Inference Module - Production Version (Optimized)
 # Author: Urva Gandhi
 # Purpose: Ensemble inference using LoRA-finetuned CodeBERT + GraphCodeBERT
 # Standard: codeGuardian Inference Standard v1.0
@@ -13,7 +13,7 @@ Production-ready semantic vulnerability detection using calibrated ensemble
 of LoRA-fine-tuned CodeBERT and GraphCodeBERT models.
 
 Features:
-✅ Dynamic LoRA adapter loading
+✅ Dynamic LoRA adapter loading with automatic merged model detection
 ✅ Configuration-driven ensemble weights & thresholds
 ✅ Temperature-scaled probability calibration
 ✅ Per-language threshold optimization
@@ -23,54 +23,8 @@ Features:
 ✅ Comprehensive JSON output with metadata
 ✅ CLI interface for standalone execution
 ✅ Import-friendly for orchestrator integration
-
-Architecture:
-┌─────────────────────────────────────────────────────┐
-│              Input: Code + Language                 │
-└────────────────┬────────────────────────────────────┘
-                 │
-                 ├──────────────┐
-                 ▼              ▼
-         ┌──────────────┐ ┌──────────────┐
-         │  CodeBERT    │ │GraphCodeBERT │
-         │  + LoRA      │ │  + LoRA      │
-         └──────┬───────┘ └──────┬───────┘
-                │                │
-                ▼                ▼
-         ┌──────────────┐ ┌──────────────┐
-         │ Temperature  │ │ Temperature  │
-         │  Scaling     │ │  Scaling     │
-         └──────┬───────┘ └──────┬───────┘
-                │                │
-                └────────┬───────┘
-                         ▼
-                  ┌──────────────┐
-                  │   Weighted   │
-                  │   Ensemble   │
-                  └──────┬───────┘
-                         ▼
-                  ┌──────────────┐
-                  │  Threshold   │
-                  │  Application │
-                  └──────┬───────┘
-                         ▼
-                  ┌──────────────┐
-                  │   JSON       │
-                  │   Output     │
-                  └──────────────┘
-
-Usage (CLI):
-    python inference_semantic.py --code path/to/file.c --language C
-    python inference_semantic.py --code "int main() {...}" --language C
-
-Usage (Import):
-    from src.ml.inference.inference_semantic import run_inference
-
-    result = run_inference({
-        "code": "int main() { ... }",
-        "language": "C",
-        "metadata": {"file": "main.c"}
-    })
+✅ Robust error handling with proper exit codes
+✅ Optimized for Kaggle GPU runtime
 """
 
 import json
@@ -96,12 +50,12 @@ from peft import PeftModel
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Prevent tokenizer warnings
 
 # ============================================================================
 # LOGGING CONFIGURATION
 # ============================================================================
 
-# Setup colored logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -175,8 +129,6 @@ def load_ensemble_config(config_path: str = DEFAULT_CONFIG_PATH) -> Dict[str, An
             config = json.load(f)
 
         # Handle both old and new config schema formats
-        # New schema: {"models": {"codebert": {"weight": 0.4, "temperature": 0.5974}, ...}}
-        # Old schema: {"weights": {...}, "temperatures": {...}}
         if "models" in config and ("weights" not in config or "temperatures" not in config):
             logger.info("Detected new config schema format, converting...")
             models = config["models"]
@@ -199,7 +151,7 @@ def load_ensemble_config(config_path: str = DEFAULT_CONFIG_PATH) -> Dict[str, An
         # Validate weights sum to 1.0
         weights = config["weights"]
         weight_sum = weights.get("codebert", 0) + weights.get("graphcodebert", 0)
-        if not (0.99 <= weight_sum <= 1.01):  # Allow small floating point errors
+        if not (0.99 <= weight_sum <= 1.01):
             logger.warning(f"{Colors.WARNING}⚠️ Model weights sum to {weight_sum:.4f}, normalizing...{Colors.ENDC}")
             total = weights["codebert"] + weights["graphcodebert"]
             weights["codebert"] /= total
@@ -256,7 +208,7 @@ class SemanticInferenceEngine:
 
         logger.info(f"{Colors.OKBLUE}🖥️  Using device: {self.device}{Colors.ENDC}")
 
-        # Determine dtype per-model (no global dtype mutation)
+        # Determine dtype per-model
         self.model_dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         logger.info(f"{Colors.OKBLUE}🔧 Model dtype: {self.model_dtype}{Colors.ENDC}")
 
@@ -264,13 +216,13 @@ class SemanticInferenceEngine:
         self.codebert_adapter_path = codebert_adapter_path or DEFAULT_CODEBERT_ADAPTER
         self.graphcodebert_adapter_path = graphcodebert_adapter_path or DEFAULT_GRAPHCODEBERT_ADAPTER
 
-        # Initialize models and tokenizers (separate tokenizers per model)
+        # Initialize models and tokenizers
         self.codebert_tokenizer = None
         self.graphcodebert_tokenizer = None
         self.codebert_model = None
         self.graphcodebert_model = None
         self.adapter_checksums = {}
-        self.model_load_types = {}  # Track if loaded as merged or peft
+        self.model_load_types = {}
 
         # Load models
         self._load_models()
@@ -278,7 +230,6 @@ class SemanticInferenceEngine:
     def _compute_adapter_checksum(self, adapter_path: str) -> str:
         """
         Compute MD5 checksum of adapter weights for traceability.
-        Checks multiple possible file formats.
 
         Args:
             adapter_path: Path to adapter directory
@@ -288,7 +239,7 @@ class SemanticInferenceEngine:
         """
         # Try multiple adapter file formats
         adapter_file = None
-        for fname in ["adapter_model.safetensors", "adapter_model.bin", "pytorch_model.bin"]:
+        for fname in ["adapter_model.safetensors", "adapter_model.bin", "pytorch_model.bin", "model.safetensors"]:
             candidate = os.path.join(adapter_path, fname)
             if os.path.exists(candidate):
                 adapter_file = candidate
@@ -300,7 +251,6 @@ class SemanticInferenceEngine:
 
         md5_hash = hashlib.md5()
         with open(adapter_file, "rb") as f:
-            # Read in chunks for memory efficiency
             for chunk in iter(lambda: f.read(4096), b""):
                 md5_hash.update(chunk)
 
@@ -318,76 +268,121 @@ class SemanticInferenceEngine:
         Returns:
             Tuple of (model, load_type) where load_type is "merged" or "peft"
         """
-        # Check for merged checkpoint first (includes trained classifier)
-        merged_path = os.path.join(adapter_path, "merged")
+        # Strategy 1: Check for merged checkpoint in common locations
+        merged_candidates = [
+            os.path.join(adapter_path, f"{model_name.lower()}_merged"),
+            os.path.join(adapter_path, "merged"),
+            os.path.join(os.path.dirname(adapter_path), f"{model_name.lower()}_merged")
+        ]
 
-        if os.path.exists(os.path.join(merged_path, "config.json")):
-            logger.info(f"  📦 Found merged checkpoint, loading complete model...")
-            try:
-                model = AutoModelForSequenceClassification.from_pretrained(
-                    merged_path,
-                    torch_dtype=self.model_dtype
-                )
-                model = model.to(self.device)
-                model.eval()
-                logger.info(f"  {Colors.OKGREEN}✓ Loaded merged checkpoint (includes trained classifier){Colors.ENDC}")
-                return model, "merged"
-            except Exception as e:
-                logger.warning(f"  {Colors.WARNING}⚠️ Merged checkpoint load failed: {e}, trying PEFT...{Colors.ENDC}")
+        for merged_path in merged_candidates:
+            config_path = os.path.join(merged_path, "config.json")
+            if os.path.exists(config_path):
+                logger.info(f"  📦 Found merged checkpoint at: {merged_path}")
+                try:
+                    # Load with explicit error handling
+                    model = AutoModelForSequenceClassification.from_pretrained(
+                        merged_path,
+                        torch_dtype=self.model_dtype,
+                        num_labels=2,
+                        local_files_only=True,
+                        trust_remote_code=False
+                    )
+                    model = model.to(self.device)
+                    model.eval()
 
-        # Fallback to PEFT adapter loading
+                    # Verify classifier head exists
+                    if hasattr(model, 'classifier'):
+                        logger.info(f"  {Colors.OKGREEN}✓ Merged model loaded with trained classifier{Colors.ENDC}")
+                        return model, "merged"
+                    else:
+                        logger.warning(f"  {Colors.WARNING}⚠️ Merged model missing classifier, trying next...{Colors.ENDC}")
+                        del model
+
+                except Exception as e:
+                    logger.warning(f"  {Colors.WARNING}⚠️ Merged load failed: {str(e)[:80]}...{Colors.ENDC}")
+                    continue
+
+        # Strategy 2: Load PEFT adapter
+        logger.info(f"  📦 Loading PEFT adapter from: {adapter_path}")
+
         if not os.path.exists(adapter_path):
-            raise FileNotFoundError(f"{model_name} adapter not found: {adapter_path}")
+            raise FileNotFoundError(f"{model_name} adapter directory not found: {adapter_path}")
 
-        # Verify adapter has required files
-        adapter_files = ["adapter_model.safetensors", "adapter_model.bin", "pytorch_model.bin"]
+        # Check for adapter files
+        adapter_files = ["adapter_model.safetensors", "adapter_model.bin"]
         has_adapter = any(os.path.exists(os.path.join(adapter_path, f)) for f in adapter_files)
 
         if not has_adapter:
             raise FileNotFoundError(
-                f"{model_name} adapter path exists but no weight files found. "
-                f"Expected one of: {adapter_files}"
+                f"{model_name} adapter not found. Expected adapter_model.safetensors or adapter_model.bin in {adapter_path}"
             )
 
-        logger.info(f"  📦 Loading PEFT adapter...")
-        logger.warning(
-            f"  {Colors.WARNING}⚠️ PEFT mode: Ensure your adapter was saved with modules_to_save=['classifier']{Colors.ENDC}"
-        )
+        try:
+            # Load base model with suppressed warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*were not initialized.*")
+                warnings.filterwarnings("ignore", message=".*not found in model.*")
 
-        base_model = AutoModelForSequenceClassification.from_pretrained(
-            base_model_id,
-            num_labels=2,
-            torch_dtype=self.model_dtype
-        )
-        model = PeftModel.from_pretrained(base_model, adapter_path)
-        model = model.to(self.device)
-        model.eval()
+                base_model = AutoModelForSequenceClassification.from_pretrained(
+                    base_model_id,
+                    num_labels=2,
+                    torch_dtype=self.model_dtype,
+                    local_files_only=False
+                )
 
-        logger.info(f"  {Colors.OKGREEN}✓ Loaded PEFT adapter{Colors.ENDC}")
-        return model, "peft"
+            # Load PEFT adapter (will override classifier if saved with modules_to_save)
+            model = PeftModel.from_pretrained(
+                base_model,
+                adapter_path,
+                is_trainable=False
+            )
+
+            model = model.to(self.device)
+            model.eval()
+
+            # Verify adapter loaded
+            if hasattr(model, 'peft_config'):
+                logger.info(f"  {Colors.OKGREEN}✓ PEFT adapter loaded successfully{Colors.ENDC}")
+            else:
+                logger.warning(f"  {Colors.WARNING}⚠️ PEFT config not found, model may be incomplete{Colors.ENDC}")
+
+            return model, "peft"
+
+        except Exception as e:
+            logger.error(f"  {Colors.FAIL}❌ PEFT adapter load failed: {e}{Colors.ENDC}")
+            raise RuntimeError(f"Failed to load {model_name} model from {adapter_path}: {e}")
 
     def _load_models(self):
-        """Load tokenizers and both LoRA-adapted models."""
+        """Load tokenizers and both LoRA-adapted models with robust error handling."""
         logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}")
         logger.info(f"{Colors.HEADER}Loading Models & Tokenizers{Colors.ENDC}")
         logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}")
 
-        # Load separate tokenizers for each model (they have different vocabs)
+        # Load separate tokenizers for each model
         logger.info("📦 Loading CodeBERT tokenizer...")
         try:
-            self.codebert_tokenizer = AutoTokenizer.from_pretrained(CODEBERT_BASE, use_fast=True)
+            self.codebert_tokenizer = AutoTokenizer.from_pretrained(
+                CODEBERT_BASE,
+                use_fast=True,
+                local_files_only=False
+            )
             logger.info(f"{Colors.OKGREEN}✓ CodeBERT tokenizer loaded (vocab size: {len(self.codebert_tokenizer)}){Colors.ENDC}")
         except Exception as e:
             logger.error(f"{Colors.FAIL}❌ Failed to load CodeBERT tokenizer: {e}{Colors.ENDC}")
-            raise
+            raise RuntimeError(f"CodeBERT tokenizer initialization failed: {e}")
 
-        logger.info("� Loading GraphCodeBERT tokenizer...")
+        logger.info("📦 Loading GraphCodeBERT tokenizer...")
         try:
-            self.graphcodebert_tokenizer = AutoTokenizer.from_pretrained(GRAPHCODEBERT_BASE, use_fast=True)
+            self.graphcodebert_tokenizer = AutoTokenizer.from_pretrained(
+                GRAPHCODEBERT_BASE,
+                use_fast=True,
+                local_files_only=False
+            )
             logger.info(f"{Colors.OKGREEN}✓ GraphCodeBERT tokenizer loaded (vocab size: {len(self.graphcodebert_tokenizer)}){Colors.ENDC}")
         except Exception as e:
             logger.error(f"{Colors.FAIL}❌ Failed to load GraphCodeBERT tokenizer: {e}{Colors.ENDC}")
-            raise
+            raise RuntimeError(f"GraphCodeBERT tokenizer initialization failed: {e}")
 
         # Load CodeBERT model
         logger.info("\n🔹 Loading CodeBERT model...")
@@ -401,12 +396,12 @@ class SemanticInferenceEngine:
             self.adapter_checksums["codebert"] = self._compute_adapter_checksum(self.codebert_adapter_path)
 
             logger.info(f"{Colors.OKGREEN}✓ CodeBERT loaded successfully ({load_type} mode){Colors.ENDC}")
-            logger.info(f"  - Path: {self.codebert_adapter_path}")
-            logger.info(f"  - Checksum: {self.adapter_checksums['codebert']}")
+            logger.info(f"  - Adapter path: {self.codebert_adapter_path}")
+            logger.info(f"  - Checksum: {self.adapter_checksums['codebert'][:16]}...")
 
         except Exception as e:
-            logger.error(f"{Colors.FAIL}❌ Failed to load CodeBERT: {e}{Colors.ENDC}")
-            raise
+            logger.error(f"{Colors.FAIL}❌ Failed to load CodeBERT model: {e}{Colors.ENDC}")
+            raise RuntimeError(f"CodeBERT model initialization failed: {e}")
 
         # Load GraphCodeBERT model
         logger.info("\n🔹 Loading GraphCodeBERT model...")
@@ -420,21 +415,18 @@ class SemanticInferenceEngine:
             self.adapter_checksums["graphcodebert"] = self._compute_adapter_checksum(self.graphcodebert_adapter_path)
 
             logger.info(f"{Colors.OKGREEN}✓ GraphCodeBERT loaded successfully ({load_type} mode){Colors.ENDC}")
-            logger.info(f"  - Path: {self.graphcodebert_adapter_path}")
-            logger.info(f"  - Checksum: {self.adapter_checksums['graphcodebert']}")
+            logger.info(f"  - Adapter path: {self.graphcodebert_adapter_path}")
+            logger.info(f"  - Checksum: {self.adapter_checksums['graphcodebert'][:16]}...")
 
         except Exception as e:
-            logger.error(f"{Colors.FAIL}❌ Failed to load GraphCodeBERT: {e}{Colors.ENDC}")
-            raise
+            logger.error(f"{Colors.FAIL}❌ Failed to load GraphCodeBERT model: {e}{Colors.ENDC}")
+            raise RuntimeError(f"GraphCodeBERT model initialization failed: {e}")
 
         logger.info(f"\n{Colors.OKGREEN}✅ All models and tokenizers loaded successfully{Colors.ENDC}")
         logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}\n")
 
     def dispose(self):
-        """
-        Clean up models and release GPU memory.
-        Use this for long-running sessions or when the engine is no longer needed.
-        """
+        """Clean up models and release GPU memory."""
         logger.info(f"{Colors.OKCYAN}🧹 Disposing inference engine...{Colors.ENDC}")
 
         if self.codebert_model is not None:
@@ -453,7 +445,6 @@ class SemanticInferenceEngine:
             del self.graphcodebert_tokenizer
             self.graphcodebert_tokenizer = None
 
-        # Force GPU memory cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
@@ -461,25 +452,11 @@ class SemanticInferenceEngine:
         logger.info(f"{Colors.OKGREEN}✓ Engine disposed and memory released{Colors.ENDC}")
 
     def _tokenize_code_for_model(self, code: str, model_type: str) -> Dict[str, torch.Tensor]:
-        """
-        Tokenize code snippet using the appropriate tokenizer for the model.
-
-        CodeBERT and GraphCodeBERT have different vocabularies and must use
-        their respective tokenizers.
-
-        Args:
-            code: Source code string
-            model_type: Either "codebert" or "graphcodebert"
-
-        Returns:
-            Dictionary with input_ids and attention_mask tensors
-        """
-        # Safeguard: trim extremely long code
+        """Tokenize code snippet using the appropriate tokenizer."""
         if len(code) > 30000:
             logger.warning(f"{Colors.WARNING}⚠️ Code length exceeds 30000 chars, truncating...{Colors.ENDC}")
             code = code[:30000]
 
-        # Select appropriate tokenizer
         tokenizer = self.codebert_tokenizer if model_type == "codebert" else self.graphcodebert_tokenizer
 
         tokens = tokenizer(
@@ -490,7 +467,6 @@ class SemanticInferenceEngine:
             return_tensors="pt"
         )
 
-        # Move to device
         return {k: v.to(self.device) for k, v in tokens.items()}
 
     def _get_model_probability(
@@ -499,45 +475,21 @@ class SemanticInferenceEngine:
         tokens: Dict[str, torch.Tensor],
         temperature: float
     ) -> float:
-        """
-        Get calibrated probability from a single model using temperature-scaled softmax.
-
-        CRITICAL: For a 2-class classification head, we MUST use softmax across both logits,
-        not sigmoid on a single logit. Temperature scaling is applied before softmax.
-
-        Args:
-            model: Model (either PEFT or merged checkpoint)
-            tokens: Tokenized input
-            temperature: Temperature scaling factor
-
-        Returns:
-            Calibrated probability for vulnerable class (class 1)
-        """
+        """Get calibrated probability from a single model using temperature scaling."""
         with torch.no_grad():
             outputs = model(**tokens)
-            logits = outputs.logits[0]  # Shape: [2] for binary classification
+            logits = outputs.logits[0]
 
-            # Apply temperature scaling to logits, then softmax
-            # This is the mathematically correct way for multi-class probability calibration
+            # Apply temperature scaling then softmax
             scaled_logits = logits / temperature
             probs = torch.softmax(scaled_logits, dim=-1)
 
-            # Return probability of vulnerable class (index 1)
             return float(probs[1])
 
     def _get_threshold(self, language: str) -> float:
-        """
-        Get appropriate threshold for the given language.
-
-        Args:
-            language: Programming language (normalized to lowercase)
-
-        Returns:
-            Threshold value (per-language or global fallback)
-        """
+        """Get appropriate threshold for the given language."""
         thresholds = self.config["thresholds"]
 
-        # Normalize per-language thresholds to lowercase for case-insensitive matching
         per_language_thresholds = {
             k.lower(): v for k, v in thresholds.get("per_language", {}).items()
         }
@@ -553,17 +505,7 @@ class SemanticInferenceEngine:
             return threshold
 
     def _determine_confidence(self, probability: float, threshold: float, abstain_margin: float) -> str:
-        """
-        Determine confidence level based on distance from threshold.
-
-        Args:
-            probability: Predicted probability
-            threshold: Decision threshold
-            abstain_margin: Margin for abstention
-
-        Returns:
-            Confidence level: "High", "Medium", "Low", or "Abstained"
-        """
+        """Determine confidence level based on distance from threshold."""
         distance = abs(probability - threshold)
 
         if distance < abstain_margin:
@@ -587,7 +529,7 @@ class SemanticInferenceEngine:
         Args:
             code: Source code string
             language: Programming language
-            metadata: Optional metadata (file path, commit ID, etc.)
+            metadata: Optional metadata
 
         Returns:
             Comprehensive inference result dictionary
@@ -595,7 +537,6 @@ class SemanticInferenceEngine:
         Raises:
             ValueError: If language is not supported or code is empty
         """
-        # Validate inputs
         if not code or not code.strip():
             raise ValueError("Code cannot be empty")
 
@@ -603,16 +544,16 @@ class SemanticInferenceEngine:
         if language_normalized not in SUPPORTED_LANGUAGES:
             logger.warning(
                 f"{Colors.WARNING}⚠️ Language '{language}' not in supported list, "
-                f"proceeding with inference...{Colors.ENDC}"
+                f"proceeding anyway...{Colors.ENDC}"
             )
 
         logger.info(f"\n{Colors.OKCYAN}🔍 Running semantic inference...{Colors.ENDC}")
         logger.info(f"  - Language: {language}")
         logger.info(f"  - Code length: {len(code)} chars")
 
-        # Tokenize for each model separately (different vocabularies)
         start_time = datetime.utcnow()
 
+        # Tokenize for each model
         logger.info("  - Tokenizing for CodeBERT...")
         codebert_tokens = self._tokenize_code_for_model(code, "codebert")
 
@@ -624,7 +565,7 @@ class SemanticInferenceEngine:
         temperatures = self.config["temperatures"]
         abstain_margin = self.config["thresholds"].get("abstain_margin", 0.05)
 
-        # Run inference on both models
+        # Run inference
         logger.info("  - Running CodeBERT inference...")
         codebert_prob = self._get_model_probability(
             self.codebert_model,
@@ -669,7 +610,7 @@ class SemanticInferenceEngine:
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
 
-        # Determine canonical status for pipeline automation
+        # Determine canonical status
         if abstained:
             status = "abstained"
         elif is_vulnerable:
@@ -679,7 +620,7 @@ class SemanticInferenceEngine:
 
         # Build result
         result = {
-            "status": status,  # Canonical status for orchestrators
+            "status": status,
             "language": language,
             "vulnerability_probability": round(semantic_prob, 4),
             "is_vulnerable": is_vulnerable if not abstained else None,
@@ -731,37 +672,22 @@ def run_inference(
     """
     Convenience function to run semantic inference.
 
-    This function can be imported by orchestrators and other modules.
-
     Args:
-        input_data: Input dictionary with keys:
-            - code: Source code string (required)
-            - language: Programming language (required)
-            - metadata: Optional metadata dictionary
+        input_data: Input dictionary with code, language, metadata
         config_path: Path to ensemble configuration file
-        engine: Optional pre-initialized engine (for reuse)
+        engine: Optional pre-initialized engine
 
     Returns:
         Inference result dictionary
-
-    Example:
-        >>> result = run_inference({
-        ...     "code": "int main() { ... }",
-        ...     "language": "C",
-        ...     "metadata": {"file": "main.c"}
-        ... })
     """
-    # Validate input
     if "code" not in input_data:
         raise ValueError("Input must contain 'code' field")
     if "language" not in input_data:
         raise ValueError("Input must contain 'language' field")
 
-    # Initialize engine if not provided
     if engine is None:
         engine = SemanticInferenceEngine(config_path=config_path)
 
-    # Run inference
     result = engine.infer(
         code=input_data["code"],
         language=input_data["language"],
@@ -781,85 +707,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Analyze a file
   python inference_semantic.py --code path/to/file.c --language C
-
-  # Analyze inline code
   python inference_semantic.py --code "int main() { ... }" --language C
-
-  # Custom config
   python inference_semantic.py --code file.py --language Python --config custom_config.json
-
-  # Use CPU
-  python inference_semantic.py --code file.c --language C --device cpu
         """
     )
 
-    parser.add_argument(
-        "--code",
-        type=str,
-        required=True,
-        help="Source code string or path to code file"
-    )
-
-    parser.add_argument(
-        "--language",
-        type=str,
-        required=True,
-        help="Programming language (C, Python, Java, etc.)"
-    )
-
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=DEFAULT_CONFIG_PATH,
-        help=f"Path to ensemble_config.json (default: {DEFAULT_CONFIG_PATH})"
-    )
-
-    parser.add_argument(
-        "--codebert-adapter",
-        type=str,
-        default=None,
-        help=f"Path to CodeBERT LoRA adapter (default: {DEFAULT_CODEBERT_ADAPTER})"
-    )
-
-    parser.add_argument(
-        "--graphcodebert-adapter",
-        type=str,
-        default=None,
-        help=f"Path to GraphCodeBERT LoRA adapter (default: {DEFAULT_GRAPHCODEBERT_ADAPTER})"
-    )
-
-    parser.add_argument(
-        "--device",
-        type=str,
-        choices=["cuda", "cpu", "auto"],
-        default="auto",
-        help="Device to use for inference (default: auto)"
-    )
-
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Output JSON file path (default: print to stdout)"
-    )
-
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress progress messages (only output JSON)"
-    )
-
-    parser.add_argument(
-        "--success-on-abstain",
-        action="store_true",
-        help="Exit with code 0 even when prediction is abstained (for CI/CD pipelines)"
-    )
+    parser.add_argument("--code", type=str, required=True, help="Source code string or path to code file")
+    parser.add_argument("--language", type=str, required=True, help="Programming language")
+    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH, help="Path to ensemble_config.json")
+    parser.add_argument("--codebert-adapter", type=str, default=None, help="Path to CodeBERT LoRA adapter")
+    parser.add_argument("--graphcodebert-adapter", type=str, default=None, help="Path to GraphCodeBERT LoRA adapter")
+    parser.add_argument("--device", type=str, choices=["cuda", "cpu", "auto"], default="auto", help="Device to use")
+    parser.add_argument("--output", type=str, default=None, help="Output JSON file path")
+    parser.add_argument("--quiet", action="store_true", help="Suppress progress messages")
+    parser.add_argument("--success-on-abstain", action="store_true", help="Exit with code 0 when abstained")
 
     args = parser.parse_args()
 
-    # Set logging level
     if args.quiet:
         logger.setLevel(logging.ERROR)
 
@@ -867,19 +732,17 @@ Examples:
     code_input = args.code
     if os.path.isfile(code_input):
         logger.info(f"📂 Reading code from file: {code_input}")
-        with open(code_input, 'r', encoding='utf-8') as f:
+        with open(code_input, 'r', encoding='utf-8', errors='ignore') as f:
             code = f.read()
         source_file = code_input
     else:
         code = code_input
         source_file = "inline"
 
-    # Set device
     device = None if args.device == "auto" else args.device
 
     engine = None
     try:
-        # Initialize engine
         logger.info(f"\n{Colors.HEADER}{'='*80}{Colors.ENDC}")
         logger.info(f"{Colors.HEADER}codeGuardian Semantic Inference Engine{Colors.ENDC}")
         logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}\n")
@@ -891,14 +754,12 @@ Examples:
             device=device
         )
 
-        # Run inference
         result = engine.infer(
             code=code,
             language=args.language,
             metadata={"source_file": source_file}
         )
 
-        # Output result
         if args.output:
             with open(args.output, 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=2)
@@ -910,21 +771,16 @@ Examples:
             print(json.dumps(result, indent=2))
             print("="*80)
 
-        # Get exit code before cleanup
         exit_code = EXIT_CODES.get(result["status"], EXIT_CODES["error"])
 
-        # Override exit code for abstained if flag is set
         if args.success_on_abstain and result["status"] == "abstained":
             exit_code = 0
             logger.info(f"{Colors.OKCYAN}ℹ️  Treating abstained prediction as success (--success-on-abstain){Colors.ENDC}")
 
-        # Clean up resources
-        try:
+        # Clean up
+        if engine is not None:
             engine.dispose()
-        except Exception as cleanup_error:
-            logger.warning(f"{Colors.WARNING}⚠️ Cleanup warning: {cleanup_error}{Colors.ENDC}")
 
-        # Exit with appropriate status code
         logger.info(f"\n{Colors.OKBLUE}🚪 Exiting with code {exit_code} ({result['status']}){Colors.ENDC}")
         sys.exit(exit_code)
 
@@ -941,11 +797,10 @@ Examples:
         logger.error(f"\n{Colors.FAIL}❌ Inference failed: {e}{Colors.ENDC}")
         logger.error(f"{Colors.FAIL}Error type: {type(e).__name__}{Colors.ENDC}")
 
-        # Print traceback for debugging
         import traceback
+        logger.error(f"{Colors.FAIL}Traceback:{Colors.ENDC}")
         traceback.print_exc()
 
-        # Attempt cleanup
         if engine is not None:
             try:
                 engine.dispose()
