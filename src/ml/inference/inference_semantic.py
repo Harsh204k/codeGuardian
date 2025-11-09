@@ -256,20 +256,21 @@ class SemanticInferenceEngine:
 
         logger.info(f"{Colors.OKBLUE}🖥️  Using device: {self.device}{Colors.ENDC}")
 
-        # Set default dtype for CUDA to ensure true FP16 inference
-        if self.device.type == "cuda":
-            torch.set_default_dtype(torch.float16)
-            logger.info(f"{Colors.OKBLUE}🔧 Set default dtype to float16 for CUDA{Colors.ENDC}")
+        # Determine dtype per-model (no global dtype mutation)
+        self.model_dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        logger.info(f"{Colors.OKBLUE}🔧 Model dtype: {self.model_dtype}{Colors.ENDC}")
 
         # Set adapter paths
         self.codebert_adapter_path = codebert_adapter_path or DEFAULT_CODEBERT_ADAPTER
         self.graphcodebert_adapter_path = graphcodebert_adapter_path or DEFAULT_GRAPHCODEBERT_ADAPTER
 
-        # Initialize models and tokenizer
-        self.tokenizer = None
+        # Initialize models and tokenizers (separate tokenizers per model)
+        self.codebert_tokenizer = None
+        self.graphcodebert_tokenizer = None
         self.codebert_model = None
         self.graphcodebert_model = None
         self.adapter_checksums = {}
+        self.model_load_types = {}  # Track if loaded as merged or peft
 
         # Load models
         self._load_models()
@@ -305,77 +306,128 @@ class SemanticInferenceEngine:
 
         return md5_hash.hexdigest()
 
+    def _load_model_with_fallback(self, base_model_id: str, adapter_path: str, model_name: str):
+        """
+        Load model with fallback strategy: merged checkpoint first, then PEFT adapter.
+
+        Args:
+            base_model_id: Base model HuggingFace ID
+            adapter_path: Path to adapter directory
+            model_name: Name for logging (e.g., "CodeBERT")
+
+        Returns:
+            Tuple of (model, load_type) where load_type is "merged" or "peft"
+        """
+        # Check for merged checkpoint first (includes trained classifier)
+        merged_path = os.path.join(adapter_path, "merged")
+
+        if os.path.exists(os.path.join(merged_path, "config.json")):
+            logger.info(f"  📦 Found merged checkpoint, loading complete model...")
+            try:
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    merged_path,
+                    torch_dtype=self.model_dtype
+                )
+                model = model.to(self.device)
+                model.eval()
+                logger.info(f"  {Colors.OKGREEN}✓ Loaded merged checkpoint (includes trained classifier){Colors.ENDC}")
+                return model, "merged"
+            except Exception as e:
+                logger.warning(f"  {Colors.WARNING}⚠️ Merged checkpoint load failed: {e}, trying PEFT...{Colors.ENDC}")
+
+        # Fallback to PEFT adapter loading
+        if not os.path.exists(adapter_path):
+            raise FileNotFoundError(f"{model_name} adapter not found: {adapter_path}")
+
+        # Verify adapter has required files
+        adapter_files = ["adapter_model.safetensors", "adapter_model.bin", "pytorch_model.bin"]
+        has_adapter = any(os.path.exists(os.path.join(adapter_path, f)) for f in adapter_files)
+
+        if not has_adapter:
+            raise FileNotFoundError(
+                f"{model_name} adapter path exists but no weight files found. "
+                f"Expected one of: {adapter_files}"
+            )
+
+        logger.info(f"  📦 Loading PEFT adapter...")
+        logger.warning(
+            f"  {Colors.WARNING}⚠️ PEFT mode: Ensure your adapter was saved with modules_to_save=['classifier']{Colors.ENDC}"
+        )
+
+        base_model = AutoModelForSequenceClassification.from_pretrained(
+            base_model_id,
+            num_labels=2,
+            torch_dtype=self.model_dtype
+        )
+        model = PeftModel.from_pretrained(base_model, adapter_path)
+        model = model.to(self.device)
+        model.eval()
+
+        logger.info(f"  {Colors.OKGREEN}✓ Loaded PEFT adapter{Colors.ENDC}")
+        return model, "peft"
+
     def _load_models(self):
-        """Load tokenizer and both LoRA-adapted models."""
+        """Load tokenizers and both LoRA-adapted models."""
         logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}")
-        logger.info(f"{Colors.HEADER}Loading Models{Colors.ENDC}")
+        logger.info(f"{Colors.HEADER}Loading Models & Tokenizers{Colors.ENDC}")
         logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}")
 
-        # Load shared tokenizer (RobertaTokenizer for both CodeBERT variants)
-        logger.info("📦 Loading tokenizer...")
+        # Load separate tokenizers for each model (they have different vocabs)
+        logger.info("📦 Loading CodeBERT tokenizer...")
         try:
-            self.tokenizer = RobertaTokenizer.from_pretrained(CODEBERT_BASE)
-
-            # Validate tokenizer type for safety
-            assert isinstance(self.tokenizer, RobertaTokenizer), \
-                f"Unexpected tokenizer class: {type(self.tokenizer).__name__}"
-
-            logger.info(f"{Colors.OKGREEN}✓ Tokenizer loaded (vocab size: {len(self.tokenizer)}){Colors.ENDC}")
+            self.codebert_tokenizer = AutoTokenizer.from_pretrained(CODEBERT_BASE, use_fast=True)
+            logger.info(f"{Colors.OKGREEN}✓ CodeBERT tokenizer loaded (vocab size: {len(self.codebert_tokenizer)}){Colors.ENDC}")
         except Exception as e:
-            logger.error(f"{Colors.FAIL}❌ Failed to load tokenizer: {e}{Colors.ENDC}")
+            logger.error(f"{Colors.FAIL}❌ Failed to load CodeBERT tokenizer: {e}{Colors.ENDC}")
             raise
 
-        # Load CodeBERT + LoRA
-        logger.info("\n🔹 Loading CodeBERT + LoRA adapter...")
+        logger.info("� Loading GraphCodeBERT tokenizer...")
         try:
-            if not os.path.exists(self.codebert_adapter_path):
-                raise FileNotFoundError(f"CodeBERT adapter not found: {self.codebert_adapter_path}")
+            self.graphcodebert_tokenizer = AutoTokenizer.from_pretrained(GRAPHCODEBERT_BASE, use_fast=True)
+            logger.info(f"{Colors.OKGREEN}✓ GraphCodeBERT tokenizer loaded (vocab size: {len(self.graphcodebert_tokenizer)}){Colors.ENDC}")
+        except Exception as e:
+            logger.error(f"{Colors.FAIL}❌ Failed to load GraphCodeBERT tokenizer: {e}{Colors.ENDC}")
+            raise
 
-            base_model = AutoModelForSequenceClassification.from_pretrained(
+        # Load CodeBERT model
+        logger.info("\n🔹 Loading CodeBERT model...")
+        try:
+            self.codebert_model, load_type = self._load_model_with_fallback(
                 CODEBERT_BASE,
-                num_labels=2,
-                torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32
+                self.codebert_adapter_path,
+                "CodeBERT"
             )
-            self.codebert_model = PeftModel.from_pretrained(base_model, self.codebert_adapter_path)
-            self.codebert_model = self.codebert_model.to(self.device)
-            self.codebert_model.eval()
-
+            self.model_load_types["codebert"] = load_type
             self.adapter_checksums["codebert"] = self._compute_adapter_checksum(self.codebert_adapter_path)
 
-            logger.info(f"{Colors.OKGREEN}✓ CodeBERT loaded successfully{Colors.ENDC}")
-            logger.info(f"  - Adapter: {self.codebert_adapter_path}")
+            logger.info(f"{Colors.OKGREEN}✓ CodeBERT loaded successfully ({load_type} mode){Colors.ENDC}")
+            logger.info(f"  - Path: {self.codebert_adapter_path}")
             logger.info(f"  - Checksum: {self.adapter_checksums['codebert']}")
 
         except Exception as e:
             logger.error(f"{Colors.FAIL}❌ Failed to load CodeBERT: {e}{Colors.ENDC}")
             raise
 
-        # Load GraphCodeBERT + LoRA
-        logger.info("\n🔹 Loading GraphCodeBERT + LoRA adapter...")
+        # Load GraphCodeBERT model
+        logger.info("\n🔹 Loading GraphCodeBERT model...")
         try:
-            if not os.path.exists(self.graphcodebert_adapter_path):
-                raise FileNotFoundError(f"GraphCodeBERT adapter not found: {self.graphcodebert_adapter_path}")
-
-            base_model = AutoModelForSequenceClassification.from_pretrained(
+            self.graphcodebert_model, load_type = self._load_model_with_fallback(
                 GRAPHCODEBERT_BASE,
-                num_labels=2,
-                torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32
+                self.graphcodebert_adapter_path,
+                "GraphCodeBERT"
             )
-            self.graphcodebert_model = PeftModel.from_pretrained(base_model, self.graphcodebert_adapter_path)
-            self.graphcodebert_model = self.graphcodebert_model.to(self.device)
-            self.graphcodebert_model.eval()
-
+            self.model_load_types["graphcodebert"] = load_type
             self.adapter_checksums["graphcodebert"] = self._compute_adapter_checksum(self.graphcodebert_adapter_path)
 
-            logger.info(f"{Colors.OKGREEN}✓ GraphCodeBERT loaded successfully{Colors.ENDC}")
-            logger.info(f"  - Adapter: {self.graphcodebert_adapter_path}")
+            logger.info(f"{Colors.OKGREEN}✓ GraphCodeBERT loaded successfully ({load_type} mode){Colors.ENDC}")
+            logger.info(f"  - Path: {self.graphcodebert_adapter_path}")
             logger.info(f"  - Checksum: {self.adapter_checksums['graphcodebert']}")
 
         except Exception as e:
             logger.error(f"{Colors.FAIL}❌ Failed to load GraphCodeBERT: {e}{Colors.ENDC}")
             raise
 
-        logger.info(f"\n{Colors.OKGREEN}✅ All models loaded successfully{Colors.ENDC}")
+        logger.info(f"\n{Colors.OKGREEN}✅ All models and tokenizers loaded successfully{Colors.ENDC}")
         logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}\n")
 
     def dispose(self):
@@ -393,9 +445,13 @@ class SemanticInferenceEngine:
             del self.graphcodebert_model
             self.graphcodebert_model = None
 
-        if self.tokenizer is not None:
-            del self.tokenizer
-            self.tokenizer = None
+        if self.codebert_tokenizer is not None:
+            del self.codebert_tokenizer
+            self.codebert_tokenizer = None
+
+        if self.graphcodebert_tokenizer is not None:
+            del self.graphcodebert_tokenizer
+            self.graphcodebert_tokenizer = None
 
         # Force GPU memory cleanup
         if torch.cuda.is_available():
@@ -404,12 +460,16 @@ class SemanticInferenceEngine:
 
         logger.info(f"{Colors.OKGREEN}✓ Engine disposed and memory released{Colors.ENDC}")
 
-    def _tokenize_code(self, code: str) -> Dict[str, torch.Tensor]:
+    def _tokenize_code_for_model(self, code: str, model_type: str) -> Dict[str, torch.Tensor]:
         """
-        Tokenize code snippet.
+        Tokenize code snippet using the appropriate tokenizer for the model.
+
+        CodeBERT and GraphCodeBERT have different vocabularies and must use
+        their respective tokenizers.
 
         Args:
             code: Source code string
+            model_type: Either "codebert" or "graphcodebert"
 
         Returns:
             Dictionary with input_ids and attention_mask tensors
@@ -419,7 +479,10 @@ class SemanticInferenceEngine:
             logger.warning(f"{Colors.WARNING}⚠️ Code length exceeds 30000 chars, truncating...{Colors.ENDC}")
             code = code[:30000]
 
-        tokens = self.tokenizer(
+        # Select appropriate tokenizer
+        tokenizer = self.codebert_tokenizer if model_type == "codebert" else self.graphcodebert_tokenizer
+
+        tokens = tokenizer(
             code,
             truncation=True,
             padding="max_length",
@@ -432,15 +495,18 @@ class SemanticInferenceEngine:
 
     def _get_model_probability(
         self,
-        model: PeftModel,
+        model,
         tokens: Dict[str, torch.Tensor],
         temperature: float
     ) -> float:
         """
-        Get calibrated probability from a single model.
+        Get calibrated probability from a single model using temperature-scaled softmax.
+
+        CRITICAL: For a 2-class classification head, we MUST use softmax across both logits,
+        not sigmoid on a single logit. Temperature scaling is applied before softmax.
 
         Args:
-            model: LoRA-adapted model
+            model: Model (either PEFT or merged checkpoint)
             tokens: Tokenized input
             temperature: Temperature scaling factor
 
@@ -449,18 +515,15 @@ class SemanticInferenceEngine:
         """
         with torch.no_grad():
             outputs = model(**tokens)
-            logits = outputs.logits[0]  # Shape: [2]
+            logits = outputs.logits[0]  # Shape: [2] for binary classification
 
-            # Get logit for vulnerable class (index 1)
-            vulnerable_logit = logits[1].item()
+            # Apply temperature scaling to logits, then softmax
+            # This is the mathematically correct way for multi-class probability calibration
+            scaled_logits = logits / temperature
+            probs = torch.softmax(scaled_logits, dim=-1)
 
-            # Apply temperature scaling
-            scaled_logit = vulnerable_logit / temperature
-
-            # Convert to probability using sigmoid
-            probability = torch.sigmoid(torch.tensor(scaled_logit)).item()
-
-            return probability
+            # Return probability of vulnerable class (index 1)
+            return float(probs[1])
 
     def _get_threshold(self, language: str) -> float:
         """
@@ -547,9 +610,14 @@ class SemanticInferenceEngine:
         logger.info(f"  - Language: {language}")
         logger.info(f"  - Code length: {len(code)} chars")
 
-        # Tokenize
+        # Tokenize for each model separately (different vocabularies)
         start_time = datetime.utcnow()
-        tokens = self._tokenize_code(code)
+
+        logger.info("  - Tokenizing for CodeBERT...")
+        codebert_tokens = self._tokenize_code_for_model(code, "codebert")
+
+        logger.info("  - Tokenizing for GraphCodeBERT...")
+        graphcodebert_tokens = self._tokenize_code_for_model(code, "graphcodebert")
 
         # Get configuration parameters
         weights = self.config["weights"]
@@ -560,14 +628,14 @@ class SemanticInferenceEngine:
         logger.info("  - Running CodeBERT inference...")
         codebert_prob = self._get_model_probability(
             self.codebert_model,
-            tokens,
+            codebert_tokens,
             temperatures["codebert"]
         )
 
         logger.info("  - Running GraphCodeBERT inference...")
         graphcodebert_prob = self._get_model_probability(
             self.graphcodebert_model,
-            tokens,
+            graphcodebert_tokens,
             temperatures["graphcodebert"]
         )
 
@@ -782,7 +850,7 @@ Examples:
         action="store_true",
         help="Suppress progress messages (only output JSON)"
     )
-    
+
     parser.add_argument(
         "--success-on-abstain",
         action="store_true",
@@ -844,12 +912,12 @@ Examples:
 
         # Get exit code before cleanup
         exit_code = EXIT_CODES.get(result["status"], EXIT_CODES["error"])
-        
+
         # Override exit code for abstained if flag is set
         if args.success_on_abstain and result["status"] == "abstained":
             exit_code = 0
             logger.info(f"{Colors.OKCYAN}ℹ️  Treating abstained prediction as success (--success-on-abstain){Colors.ENDC}")
-        
+
         # Clean up resources
         try:
             engine.dispose()
@@ -868,22 +936,22 @@ Examples:
             except:
                 pass
         sys.exit(EXIT_CODES["error"])
-    
+
     except Exception as e:
         logger.error(f"\n{Colors.FAIL}❌ Inference failed: {e}{Colors.ENDC}")
         logger.error(f"{Colors.FAIL}Error type: {type(e).__name__}{Colors.ENDC}")
-        
+
         # Print traceback for debugging
         import traceback
         traceback.print_exc()
-        
+
         # Attempt cleanup
         if engine is not None:
             try:
                 engine.dispose()
             except:
                 pass
-        
+
         sys.exit(EXIT_CODES["error"])
 
 if __name__ == "__main__":
