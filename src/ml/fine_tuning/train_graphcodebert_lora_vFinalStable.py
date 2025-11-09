@@ -68,9 +68,6 @@ Output Structure:
 /kaggle/working/lora_output_graphcodebert/
 ├── adapter_config_graphcodebert.json       # LoRA adapter configuration
 ├── adapter_model_graphcodebert.bin         # Trained LoRA weights
-├── trainer_state_graphcodebert.json        # Training state
-├── tokenizer_config_graphcodebert.json     # Tokenizer config
-├── special_tokens_map_graphcodebert.json   # Special tokens
 ├── README_graphcodebert.md                 # Model documentation
 ├── checkpoints_graphcodebert/              # Epoch checkpoints
 │   └── epoch_graphcodebert_{n}.pt
@@ -80,11 +77,13 @@ Output Structure:
     └── confusion_matrix_graphcodebert.json # Confusion matrix
 
 Console Output Format:
-======================== EPOCH 1/3 ========================
-Train → Loss=0.4256 | Acc=0.6074 | Prec=0.6132 | Rec=0.5789 | F1=0.5956
-Val   → Loss=0.4398 | Acc=0.6011 | Prec=0.6052 | Rec=0.5830 | F1=0.5939
-✓ Saved best checkpoint (val_F1=0.5939)
------------------------------------------------------------
+================================================================================
+EPOCH 1/2
+================================================================================
+Train → Loss=0.2100 | Acc=0.9439 | Prec=0.8858 | Rec=0.8303 | F1=0.8572
+Val   → Loss=0.1861 | Acc=0.9510 | Prec=0.8983 | Rec=0.8553 | F1=0.8763
+✓ Saved best checkpoint (val_F1=0.8763)
+--------------------------------------------------------------------------------
 
 🎯 FINAL TEST PERFORMANCE
 Acc=0.6058 | Prec=0.6121 | Rec=0.5859 | F1=0.5987

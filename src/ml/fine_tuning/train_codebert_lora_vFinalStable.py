@@ -68,9 +68,6 @@ Output Structure:
 /kaggle/working/lora_output_codebert/
 ├── adapter_config_codebert.json       # LoRA adapter configuration
 ├── adapter_model_codebert.bin         # Trained LoRA weights
-├── trainer_state_codebert.json        # Training state
-├── tokenizer_config_codebert.json     # Tokenizer config
-├── special_tokens_map_codebert.json   # Special tokens
 ├── README_codebert.md                 # Model documentation
 ├── checkpoints_codebert/              # Epoch checkpoints
 │   └── epoch_codebert_{n}.pt
