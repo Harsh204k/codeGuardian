@@ -110,6 +110,137 @@ EXIT_CODES = {
 }
 
 # ============================================================================
+# DEBUG HELPERS
+# ============================================================================
+
+def debug_get_model_probability(
+    model,
+    tokens: Dict[str, torch.Tensor],
+    temperature: float,
+    model_tag: str = "model",
+    debug_path: str = "/kaggle/working/inference_debug.json"
+) -> Tuple[float, list]:
+    """
+    Debug version of probability extraction with detailed logging.
+    Returns (prob, logits_vector). Also writes debug JSON to disk.
+
+    Args:
+        model: The model to run inference on
+        tokens: Tokenized input
+        temperature: Temperature scaling factor
+        model_tag: Identifier for this model (e.g., "codebert")
+        debug_path: Path to save debug output
+
+    Returns:
+        Tuple of (vulnerability_probability, raw_logits_list)
+    """
+    model.eval()
+    with torch.inference_mode():
+        outputs = model(**tokens)
+        logits = outputs.logits[0].cpu().float()  # tensor([logit0, logit1])
+
+        # Safe temperature handling
+        if temperature <= 0:
+            logger.warning(f"{Colors.WARNING}⚠️ Invalid temperature {temperature}, using 1.0{Colors.ENDC}")
+            temperature = 1.0
+
+        scaled = logits / float(temperature)
+        probs = torch.softmax(scaled, dim=-1).cpu().numpy().tolist()
+
+    debug = {
+        "model_tag": model_tag,
+        "logits": logits.tolist(),
+        "scaled_logits": scaled.tolist(),
+        "probs": probs,
+        "temperature": temperature,
+        "device": str(next(model.parameters()).device) if any(True for _ in model.parameters()) else "unknown",
+        "dtype": str(logits.dtype),
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    }
+
+    # Write per-model debug file (append)
+    try:
+        if not os.path.exists(debug_path):
+            with open(debug_path, "w") as f:
+                json.dump({"runs": [debug]}, f, indent=2)
+        else:
+            with open(debug_path, "r+") as f:
+                obj = json.load(f)
+                if "runs" not in obj:
+                    obj["runs"] = []
+                obj["runs"].append(debug)
+                f.seek(0)
+                f.truncate()
+                json.dump(obj, f, indent=2)
+        logger.debug(f"Debug info written to {debug_path}")
+    except Exception as e:
+        logger.warning(f"{Colors.WARNING}Could not write debug file: {e}{Colors.ENDC}")
+
+    return float(probs[1]), logits.tolist()
+
+
+def inspect_classifier(model, tag: str) -> Dict[str, Any]:
+    """
+    Inspect classifier head parameters to detect initialization issues.
+
+    Args:
+        model: Model to inspect
+        tag: Identifier tag for logging
+
+    Returns:
+        Dictionary with classifier parameter statistics
+    """
+    info = {
+        "model_tag": tag,
+        "has_classifier": False,
+        "classifier_params": {},
+        "config": {}
+    }
+
+    # Check for classifier attribute
+    if hasattr(model, "classifier"):
+        info["has_classifier"] = True
+        for name, p in model.classifier.named_parameters():
+            info["classifier_params"][name] = {
+                "shape": list(p.shape),
+                "mean": float(p.data.mean().cpu().numpy()),
+                "std": float(p.data.std().cpu().numpy()),
+                "min": float(p.data.min().cpu().numpy()),
+                "max": float(p.data.max().cpu().numpy()),
+                "abs_max": float(p.data.abs().max().cpu().numpy())
+            }
+    else:
+        info["note"] = "classifier attr not present (may be PEFT wrapper)"
+        # Try to find classifier in wrapped model
+        if hasattr(model, "base_model") and hasattr(model.base_model, "classifier"):
+            info["has_classifier"] = True
+            info["note"] = "classifier found in base_model (PEFT wrapper)"
+            for name, p in model.base_model.classifier.named_parameters():
+                info["classifier_params"][name] = {
+                    "shape": list(p.shape),
+                    "mean": float(p.data.mean().cpu().numpy()),
+                    "std": float(p.data.std().cpu().numpy()),
+                    "min": float(p.data.min().cpu().numpy()),
+                    "max": float(p.data.max().cpu().numpy()),
+                    "abs_max": float(p.data.abs().max().cpu().numpy())
+                }
+
+    # Check config for label mapping
+    if hasattr(model, "config"):
+        config = model.config
+        if hasattr(config, "id2label"):
+            info["config"]["id2label"] = config.id2label
+        if hasattr(config, "label2id"):
+            info["config"]["label2id"] = config.label2id
+        if hasattr(config, "num_labels"):
+            info["config"]["num_labels"] = config.num_labels
+
+    logger.info(f"\n{Colors.OKCYAN}[Classifier Inspection: {tag}]{Colors.ENDC}")
+    logger.info(json.dumps(info, indent=2))
+
+    return info
+
+# ============================================================================
 # CONFIGURATION LOADER
 # ============================================================================
 
@@ -243,6 +374,12 @@ class SemanticInferenceEngine:
         self.graphcodebert_model = None
         self.adapter_checksums = {}
         self.model_load_types = {}
+        self.classifier_info = {}
+
+        # Debug mode (enabled via environment variable)
+        self.debug_mode = os.environ.get("CODEGUARDIAN_DEBUG", "false").lower() == "true"
+        if self.debug_mode:
+            logger.info(f"{Colors.WARNING}⚠️ Debug mode enabled - detailed logs will be saved{Colors.ENDC}")
 
         # Load models
         self._load_models()
@@ -451,6 +588,17 @@ class SemanticInferenceEngine:
             raise RuntimeError(f"GraphCodeBERT model initialization failed: {e}")
 
         logger.info(f"\n{Colors.OKGREEN}✅ All models and tokenizers loaded successfully{Colors.ENDC}")
+
+        # Inspect classifier heads for debugging
+        logger.info(f"\n{Colors.HEADER}{'='*80}{Colors.ENDC}")
+        logger.info(f"{Colors.HEADER}Classifier Inspection{Colors.ENDC}")
+        logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}")
+
+        self.classifier_info = {
+            "codebert": inspect_classifier(self.codebert_model, "CodeBERT"),
+            "graphcodebert": inspect_classifier(self.graphcodebert_model, "GraphCodeBERT")
+        }
+
         logger.info(f"{Colors.HEADER}{'='*80}{Colors.ENDC}\n")
 
     def dispose(self):
@@ -501,18 +649,43 @@ class SemanticInferenceEngine:
         self,
         model,
         tokens: Dict[str, torch.Tensor],
-        temperature: float
-    ) -> float:
-        """Get calibrated probability from a single model using temperature scaling."""
+        temperature: float,
+        model_tag: str = "model",
+        debug_mode: bool = False
+    ) -> Tuple[float, Optional[list]]:
+        """
+        Get calibrated probability from a single model using temperature scaling.
+
+        Args:
+            model: Model to run inference on
+            tokens: Tokenized input
+            temperature: Temperature scaling factor
+            model_tag: Identifier for debug logging
+            debug_mode: If True, return logits and write debug info
+
+        Returns:
+            Tuple of (probability, logits) if debug_mode else (probability, None)
+        """
+        if debug_mode:
+            prob, logits = debug_get_model_probability(
+                model, tokens, temperature, model_tag
+            )
+            return prob, logits
+
         with torch.inference_mode():  # Faster and safer than no_grad for pure inference
             outputs = model(**tokens)
             logits = outputs.logits[0]
+
+            # Safe temperature handling
+            if temperature <= 0:
+                logger.warning(f"{Colors.WARNING}⚠️ Invalid temperature {temperature}, using 1.0{Colors.ENDC}")
+                temperature = 1.0
 
             # Apply temperature scaling then softmax
             scaled_logits = logits / temperature
             probs = torch.softmax(scaled_logits, dim=-1)
 
-            return float(probs[1])
+            return float(probs[1]), None
 
     def _get_threshold(self, language: str) -> float:
         """Get appropriate threshold for the given language."""
@@ -596,19 +769,23 @@ class SemanticInferenceEngine:
         temperatures = self.config["temperatures"]
         abstain_margin = self.config["thresholds"].get("abstain_margin", 0.05)
 
-        # Run inference
+        # Run inference with optional debug mode
         logger.info("  - Running CodeBERT inference...")
-        codebert_prob = self._get_model_probability(
+        codebert_prob, codebert_logits = self._get_model_probability(
             self.codebert_model,
             codebert_tokens,
-            temperatures["codebert"]
+            temperatures["codebert"],
+            model_tag="codebert",
+            debug_mode=self.debug_mode
         )
 
         logger.info("  - Running GraphCodeBERT inference...")
-        graphcodebert_prob = self._get_model_probability(
+        graphcodebert_prob, graphcodebert_logits = self._get_model_probability(
             self.graphcodebert_model,
             graphcodebert_tokens,
-            temperatures["graphcodebert"]
+            temperatures["graphcodebert"],
+            model_tag="graphcodebert",
+            debug_mode=self.debug_mode
         )
 
         # Compute weighted ensemble
@@ -618,7 +795,11 @@ class SemanticInferenceEngine:
         )
 
         logger.info(f"  - CodeBERT probability: {codebert_prob:.4f}")
+        if self.debug_mode and codebert_logits:
+            logger.info(f"    Logits: {codebert_logits}")
         logger.info(f"  - GraphCodeBERT probability: {graphcodebert_prob:.4f}")
+        if self.debug_mode and graphcodebert_logits:
+            logger.info(f"    Logits: {graphcodebert_logits}")
         logger.info(f"  - Ensemble probability: {semantic_prob:.4f}")
 
         # Get threshold
@@ -681,9 +862,20 @@ class SemanticInferenceEngine:
                 "dtype": str(self.model_dtype),
                 "timestamp": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "inference_time_seconds": round(inference_time, 4),
+                "debug_mode": self.debug_mode,
                 **(metadata or {})
             }
         }
+
+        # Add debug info if enabled
+        if self.debug_mode:
+            result["debug_info"] = {
+                "raw_logits": {
+                    "codebert": codebert_logits,
+                    "graphcodebert": graphcodebert_logits
+                },
+                "classifier_inspection": self.classifier_info
+            }
 
         # Log result
         logger.info(f"\n{Colors.OKGREEN}✅ Inference completed in {inference_time:.2f}s{Colors.ENDC}")
@@ -760,6 +952,7 @@ Examples:
     parser.add_argument("--output", type=str, default=None, help="Output JSON file path")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress messages")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    parser.add_argument("--debug", action="store_true", help="Enable detailed debug mode (logits, classifier inspection)")
     parser.add_argument("--success-on-abstain", action="store_true", help="Exit with code 0 when abstained")
 
     args = parser.parse_args()
@@ -768,6 +961,11 @@ Examples:
         logger.setLevel(logging.ERROR)
     elif args.verbose:
         logger.setLevel(logging.DEBUG)
+
+    # Set debug mode via environment variable
+    if args.debug:
+        os.environ["CODEGUARDIAN_DEBUG"] = "true"
+        logger.info(f"{Colors.WARNING}🐛 Debug mode enabled - detailed diagnostics will be logged{Colors.ENDC}")
 
     # Read code
     code_input = args.code
