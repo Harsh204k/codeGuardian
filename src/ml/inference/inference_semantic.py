@@ -38,6 +38,11 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 import warnings
 
+# --- Environment Setup (must be before torch/transformers imports) ---
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"        # Silence TensorFlow/cuDNN noise
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Avoid tokenizer thread spam
+os.environ["PYTHONWARNINGS"] = "ignore"         # Suppress UserWarnings
+
 import torch
 import torch.nn.functional as F
 from transformers import (
@@ -50,7 +55,9 @@ from peft import PeftModel
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
-os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Prevent tokenizer warnings
+
+# Inference-only mode (saves memory by disabling autograd)
+torch.set_grad_enabled(False)
 
 # ============================================================================
 # LOGGING CONFIGURATION
@@ -121,10 +128,13 @@ def load_ensemble_config(config_path: str = DEFAULT_CONFIG_PATH) -> Dict[str, An
         ValueError: If config is invalid
     """
     if not os.path.exists(config_path):
-        logger.error(f"{Colors.FAIL}❌ Configuration file not found: {config_path}{Colors.ENDC}")
+        logger.error(f"{Colors.FAIL}❌ Configuration file not found{Colors.ENDC}")
+        logger.error(f"{Colors.FAIL}   Path: {config_path}{Colors.ENDC}")
+        logger.error(f"{Colors.FAIL}   Current working directory: {os.getcwd()}{Colors.ENDC}")
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     try:
+        logger.info(f"📋 Loading configuration from: {config_path}")
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
 
@@ -200,9 +210,19 @@ class SemanticInferenceEngine:
         """
         self.config = load_ensemble_config(config_path)
 
-        # Set device
+        # Set device with CUDA accessibility check
         if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if torch.cuda.is_available():
+                try:
+                    # Test CUDA accessibility
+                    torch.zeros(1).to("cuda")
+                    self.device = torch.device("cuda")
+                except Exception as e:
+                    logger.warning(f"{Colors.WARNING}⚠️ CUDA available but not accessible: {e}{Colors.ENDC}")
+                    logger.warning(f"{Colors.WARNING}⚠️ Falling back to CPU{Colors.ENDC}")
+                    self.device = torch.device("cpu")
+            else:
+                self.device = torch.device("cpu")
         else:
             self.device = torch.device(device)
 
@@ -280,6 +300,10 @@ class SemanticInferenceEngine:
             if os.path.exists(config_path):
                 logger.info(f"  📦 Found merged checkpoint at: {merged_path}")
                 try:
+                    # Clear CUDA cache before loading
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
                     # Load with explicit error handling
                     model = AutoModelForSequenceClassification.from_pretrained(
                         merged_path,
@@ -319,6 +343,10 @@ class SemanticInferenceEngine:
             )
 
         try:
+            # Clear CUDA cache before loading
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             # Load base model with suppressed warnings
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=".*were not initialized.*")
@@ -476,7 +504,7 @@ class SemanticInferenceEngine:
         temperature: float
     ) -> float:
         """Get calibrated probability from a single model using temperature scaling."""
-        with torch.no_grad():
+        with torch.inference_mode():  # Faster and safer than no_grad for pure inference
             outputs = model(**tokens)
             logits = outputs.logits[0]
 
@@ -547,11 +575,14 @@ class SemanticInferenceEngine:
                 f"proceeding anyway...{Colors.ENDC}"
             )
 
-        logger.info(f"\n{Colors.OKCYAN}🔍 Running semantic inference...{Colors.ENDC}")
+        start_time = datetime.utcnow()
+
+        logger.info(f"\n{Colors.OKCYAN}{'='*60}{Colors.ENDC}")
+        logger.info(f"{Colors.OKCYAN}🔍 Running semantic inference{Colors.ENDC}")
+        logger.info(f"{Colors.OKCYAN}   Started: {start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}{Colors.ENDC}")
+        logger.info(f"{Colors.OKCYAN}{'='*60}{Colors.ENDC}")
         logger.info(f"  - Language: {language}")
         logger.info(f"  - Code length: {len(code)} chars")
-
-        start_time = datetime.utcnow()
 
         # Tokenize for each model
         logger.info("  - Tokenizing for CodeBERT...")
@@ -640,7 +671,14 @@ class SemanticInferenceEngine:
                 }
             },
             "metadata": {
+                "model_versions": {
+                    "codebert": CODEBERT_BASE,
+                    "graphcodebert": GRAPHCODEBERT_BASE
+                },
+                "model_load_types": self.model_load_types,
                 "adapter_sha": self.adapter_checksums,
+                "device": str(self.device),
+                "dtype": str(self.model_dtype),
                 "timestamp": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "inference_time_seconds": round(inference_time, 4),
                 **(metadata or {})
@@ -721,12 +759,15 @@ Examples:
     parser.add_argument("--device", type=str, choices=["cuda", "cpu", "auto"], default="auto", help="Device to use")
     parser.add_argument("--output", type=str, default=None, help="Output JSON file path")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress messages")
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--success-on-abstain", action="store_true", help="Exit with code 0 when abstained")
 
     args = parser.parse_args()
 
     if args.quiet:
         logger.setLevel(logging.ERROR)
+    elif args.verbose:
+        logger.setLevel(logging.DEBUG)
 
     # Read code
     code_input = args.code
@@ -782,7 +823,7 @@ Examples:
             engine.dispose()
 
         logger.info(f"\n{Colors.OKBLUE}🚪 Exiting with code {exit_code} ({result['status']}){Colors.ENDC}")
-        sys.exit(exit_code)
+        os._exit(exit_code)  # Use os._exit() to avoid IPython traceback recursion
 
     except KeyboardInterrupt:
         logger.info(f"\n{Colors.WARNING}⚠️ Interrupted by user{Colors.ENDC}")
@@ -791,7 +832,7 @@ Examples:
                 engine.dispose()
             except:
                 pass
-        sys.exit(EXIT_CODES["error"])
+        os._exit(EXIT_CODES["error"])  # Use os._exit() to avoid IPython traceback recursion
 
     except Exception as e:
         logger.error(f"\n{Colors.FAIL}❌ Inference failed: {e}{Colors.ENDC}")
@@ -807,7 +848,7 @@ Examples:
             except:
                 pass
 
-        sys.exit(EXIT_CODES["error"])
+        os._exit(EXIT_CODES["error"])  # Use os._exit() to avoid IPython traceback recursion
 
 if __name__ == "__main__":
     main()
