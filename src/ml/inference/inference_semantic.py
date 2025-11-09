@@ -782,6 +782,12 @@ Examples:
         action="store_true",
         help="Suppress progress messages (only output JSON)"
     )
+    
+    parser.add_argument(
+        "--success-on-abstain",
+        action="store_true",
+        help="Exit with code 0 even when prediction is abstained (for CI/CD pipelines)"
+    )
 
     args = parser.parse_args()
 
@@ -803,6 +809,7 @@ Examples:
     # Set device
     device = None if args.device == "auto" else args.device
 
+    engine = None
     try:
         # Initialize engine
         logger.info(f"\n{Colors.HEADER}{'='*80}{Colors.ENDC}")
@@ -835,17 +842,48 @@ Examples:
             print(json.dumps(result, indent=2))
             print("="*80)
 
+        # Get exit code before cleanup
+        exit_code = EXIT_CODES.get(result["status"], EXIT_CODES["error"])
+        
+        # Override exit code for abstained if flag is set
+        if args.success_on_abstain and result["status"] == "abstained":
+            exit_code = 0
+            logger.info(f"{Colors.OKCYAN}ℹ️  Treating abstained prediction as success (--success-on-abstain){Colors.ENDC}")
+        
         # Clean up resources
-        engine.dispose()
+        try:
+            engine.dispose()
+        except Exception as cleanup_error:
+            logger.warning(f"{Colors.WARNING}⚠️ Cleanup warning: {cleanup_error}{Colors.ENDC}")
 
         # Exit with appropriate status code
-        exit_code = EXIT_CODES.get(result["status"], EXIT_CODES["error"])
+        logger.info(f"\n{Colors.OKBLUE}🚪 Exiting with code {exit_code} ({result['status']}){Colors.ENDC}")
         sys.exit(exit_code)
 
+    except KeyboardInterrupt:
+        logger.info(f"\n{Colors.WARNING}⚠️ Interrupted by user{Colors.ENDC}")
+        if engine is not None:
+            try:
+                engine.dispose()
+            except:
+                pass
+        sys.exit(EXIT_CODES["error"])
+    
     except Exception as e:
         logger.error(f"\n{Colors.FAIL}❌ Inference failed: {e}{Colors.ENDC}")
+        logger.error(f"{Colors.FAIL}Error type: {type(e).__name__}{Colors.ENDC}")
+        
+        # Print traceback for debugging
         import traceback
         traceback.print_exc()
+        
+        # Attempt cleanup
+        if engine is not None:
+            try:
+                engine.dispose()
+            except:
+                pass
+        
         sys.exit(EXIT_CODES["error"])
 
 if __name__ == "__main__":
