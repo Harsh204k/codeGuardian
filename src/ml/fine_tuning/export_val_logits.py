@@ -53,6 +53,9 @@ Dependencies:
 import os
 import json
 import logging
+import hashlib
+import time
+from datetime import datetime
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -82,6 +85,10 @@ GRAPHCODEBERT_CHECKPOINT = "/kaggle/input/codeguardian-dataset-for-model-fine-tu
 BATCH_SIZE = 16
 MAX_LENGTH = 512
 NUM_WORKERS = 2
+SEED = 42
+
+# Output schema definition (for consistency validation)
+EXPORT_COLUMNS = ["language", "logits_codebert", "logits_graphcodebert", "y_true"]
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LOGGING SETUP
@@ -92,6 +99,29 @@ logging.basicConfig(
     format='[%(levelname)s] %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# UTILITY FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def compute_file_hash(filepath, algorithm='md5'):
+    """Compute hash of a file for traceability."""
+    if not os.path.exists(filepath):
+        return None
+    hash_func = hashlib.new(algorithm)
+    with open(filepath, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_func.update(chunk)
+    return hash_func.hexdigest()
+
+def set_seed(seed):
+    """Set random seeds for reproducibility."""
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    import random
+    import numpy as np
+    random.seed(seed)
+    np.random.seed(seed)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CUSTOM DATASET
@@ -117,21 +147,40 @@ class ValidationDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
 
+        # 1️⃣ Data Input Robustness: File existence check
+        if not os.path.exists(jsonl_path):
+            raise FileNotFoundError(
+                f"❌ Validation dataset not found at: {jsonl_path}\n"
+                f"Please ensure the dataset is uploaded to Kaggle."
+            )
+
         # Load JSONL data
         logger.info(f"Loading validation data from {jsonl_path}")
-        self.df = pd.read_json(jsonl_path, lines=True)
+        try:
+            self.df = pd.read_json(jsonl_path, lines=True)
+        except Exception as e:
+            raise ValueError(f"❌ Failed to parse JSONL file: {e}")
 
-        # Validate required columns
+        # 1️⃣ Data Input Robustness: Schema validation
         required_cols = ['code', 'language', 'is_vulnerable']
         missing_cols = set(required_cols) - set(self.df.columns)
         if missing_cols:
-            raise ValueError(f"Missing required columns: {missing_cols}")
+            raise ValueError(f"❌ Missing required columns: {missing_cols}")
+
+        # 🧱 Validation Consistency: Content quality checks
+        assert self.df['is_vulnerable'].isin([True, False]).all(), \
+            "❌ 'is_vulnerable' contains invalid values (must be True/False)"
+
+        null_code_count = self.df['code'].isna().sum()
+        empty_code_count = (self.df['code'].str.strip() == '').sum()
+        if null_code_count > 0 or empty_code_count > 0:
+            logger.warning(f"⚠️  Found {null_code_count} null and {empty_code_count} empty code entries")
 
         # Convert boolean to int labels
         self.df['label'] = self.df['is_vulnerable'].astype(int)
 
-        logger.info(f"Loaded {len(self.df):,} validation samples")
-        logger.info(f"Label distribution: {self.df['label'].value_counts().to_dict()}")
+        logger.info(f"✅ Loaded {len(self.df):,} validation samples")
+        logger.info(f"   Label distribution: {self.df['label'].value_counts().to_dict()}")
 
     def __len__(self):
         return len(self.df)
@@ -189,10 +238,18 @@ def load_lora_model(base_model_name, adapter_dir, checkpoint_path, device):
     if os.path.exists(checkpoint_path):
         logger.info(f"Loading checkpoint: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        logger.info(f"Checkpoint loaded (epoch {checkpoint.get('epoch', 'N/A')})")
+
+        # 2️⃣ Model Weight Compatibility: Load with logging of mismatches
+        incompatible_keys = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
+        if incompatible_keys.missing_keys:
+            logger.warning(f"⚠️  {len(incompatible_keys.missing_keys)} missing keys in checkpoint")
+        if incompatible_keys.unexpected_keys:
+            logger.warning(f"⚠️  {len(incompatible_keys.unexpected_keys)} unexpected keys in checkpoint")
+
+        logger.info(f"✅ Checkpoint loaded (epoch {checkpoint.get('epoch', 'N/A')})")
     else:
-        logger.warning(f"Checkpoint not found: {checkpoint_path}, using adapter weights only")
+        logger.warning(f"⚠️  Checkpoint not found: {checkpoint_path}, using adapter weights only")
 
     # Load tokenizer
     tokenizer = RobertaTokenizer.from_pretrained(base_model_name)
@@ -245,9 +302,14 @@ def extract_logits(model, dataloader, device, model_name):
             labels_list.extend(labels.tolist())
             languages_list.extend(languages)
 
-    logger.info(f"Extracted {len(logits_list):,} logits from {model_name}")
-    logger.info(f"Logit range: [{min(logits_list):.4f}, {max(logits_list):.4f}]")
-    logger.info(f"Mean logit: {sum(logits_list)/len(logits_list):.4f}")
+    # 🧮 Statistical Sanity Metrics
+    import numpy as np
+    logits_array = np.array(logits_list)
+
+    logger.info(f"✅ Extracted {len(logits_list):,} logits from {model_name}")
+    logger.info(f"   Range: [{logits_array.min():.4f}, {logits_array.max():.4f}]")
+    logger.info(f"   Mean: {logits_array.mean():.4f}")
+    logger.info(f"   Std Dev: {logits_array.std():.4f}")
 
     return logits_list, labels_list, languages_list
 
@@ -263,6 +325,12 @@ def main():
     3. Run inference with both models
     4. Merge results and export CSV
     """
+
+    # 🔄 Deterministic Ordering: Set seed for reproducibility
+    set_seed(SEED)
+
+    # 📈 Logging: Start timing
+    start_time = time.time()
 
     logger.info("=" * 80)
     logger.info("🚀 codeGuardian - Validation Logits Export")
@@ -283,6 +351,8 @@ def main():
     logger.info("📦 LOADING MODELS")
     logger.info("=" * 80)
 
+    load_start = time.time()
+
     # Load CodeBERT
     codebert_model, codebert_tokenizer = load_lora_model(
         CODEBERT_BASE,
@@ -291,15 +361,19 @@ def main():
         device
     )
 
+    logger.info(f"⏱️  CodeBERT loaded in {time.time() - load_start:.1f}s")
     logger.info("")
 
     # Load GraphCodeBERT
+    graphcodebert_load_start = time.time()
     graphcodebert_model, graphcodebert_tokenizer = load_lora_model(
         GRAPHCODEBERT_BASE,
         GRAPHCODEBERT_ADAPTER_DIR,
         GRAPHCODEBERT_CHECKPOINT,
         device
     )
+
+    logger.info(f"⏱️  GraphCodeBERT loaded in {time.time() - graphcodebert_load_start:.1f}s")
 
     # -------------------------------------------------------------------------
     # Step 2: Load Validation Dataset
@@ -323,6 +397,9 @@ def main():
     logger.info(f"Batch size: {BATCH_SIZE}")
     logger.info(f"Total batches: {len(val_loader):,}")
 
+    # 🔄 Deterministic Ordering: Log first few sample IDs for verification
+    logger.info(f"First 5 languages: {val_dataset.df['language'].head().tolist()}")
+
     # -------------------------------------------------------------------------
     # Step 3: Extract Logits from Both Models
     # -------------------------------------------------------------------------
@@ -332,16 +409,32 @@ def main():
     logger.info("=" * 80)
 
     # CodeBERT logits
+    inference_start = time.time()
     codebert_logits, labels, languages = extract_logits(
         codebert_model, val_loader, device, "CodeBERT-LoRA"
     )
+    codebert_time = time.time() - inference_start
+    logger.info(f"⏱️  CodeBERT inference completed in {codebert_time/60:.1f} minutes")
+
+    # ⚡ GPU / Memory Stability: Free CodeBERT from memory
+    logger.info("🧹 Releasing CodeBERT from GPU memory...")
+    del codebert_model
+    torch.cuda.empty_cache()
 
     logger.info("")
 
     # GraphCodeBERT logits (reuse labels and languages from first pass)
+    graphcodebert_inference_start = time.time()
     graphcodebert_logits, _, _ = extract_logits(
         graphcodebert_model, val_loader, device, "GraphCodeBERT-LoRA"
     )
+    graphcodebert_time = time.time() - graphcodebert_inference_start
+    logger.info(f"⏱️  GraphCodeBERT inference completed in {graphcodebert_time/60:.1f} minutes")
+
+    # ⚡ GPU / Memory Stability: Free GraphCodeBERT from memory
+    logger.info("🧹 Releasing GraphCodeBERT from GPU memory...")
+    del graphcodebert_model
+    torch.cuda.empty_cache()
 
     # -------------------------------------------------------------------------
     # Step 4: Merge and Export Results
@@ -359,11 +452,21 @@ def main():
         'y_true': labels
     })
 
-    # Save to CSV
-    os.makedirs(os.path.dirname(OUTPUT_CSV_PATH), exist_ok=True)
-    results_df.to_csv(OUTPUT_CSV_PATH, index=False)
+    # 🧰 Output Schema Stability: Validate column structure
+    assert list(results_df.columns) == EXPORT_COLUMNS, \
+        f"❌ Column mismatch! Expected {EXPORT_COLUMNS}, got {list(results_df.columns)}"
+    logger.info(f"✅ Output schema validated: {EXPORT_COLUMNS}")
 
-    logger.info(f"✅ Exported {len(results_df):,} samples to: {OUTPUT_CSV_PATH}")
+    # 💾 File I/O Safety: Atomic write with temporary file
+    os.makedirs(os.path.dirname(OUTPUT_CSV_PATH), exist_ok=True)
+    temp_csv_path = OUTPUT_CSV_PATH.replace('.csv', '_tmp.csv')
+
+    logger.info(f"Writing to temporary file: {temp_csv_path}")
+    results_df.to_csv(temp_csv_path, index=False)
+
+    # Atomic rename
+    os.replace(temp_csv_path, OUTPUT_CSV_PATH)
+    logger.info(f"✅ Atomically saved {len(results_df):,} samples to: {OUTPUT_CSV_PATH}")
 
     # -------------------------------------------------------------------------
     # Step 5: Validation Summary
@@ -389,10 +492,52 @@ def main():
     logger.info("\n## Label Distribution:")
     print(results_df['y_true'].value_counts().to_string())
 
-    # Correlation check
+    # 🧮 Statistical Sanity Metrics: Advanced analysis
+    import numpy as np
     correlation = results_df[['logits_codebert', 'logits_graphcodebert']].corr().iloc[0, 1]
+    mean_abs_diff = np.abs(
+        np.array(codebert_logits) - np.array(graphcodebert_logits)
+    ).mean()
+
     logger.info(f"\n## Model Correlation:")
-    logger.info(f"CodeBERT ↔ GraphCodeBERT logits: {correlation:.4f}")
+    logger.info(f"   CodeBERT ↔ GraphCodeBERT: {correlation:.4f}")
+    logger.info(f"   Mean Absolute Difference: {mean_abs_diff:.4f}")
+
+    # 🧾 Lightweight Hash Metadata: Save traceability info
+    metadata = {
+        "export_timestamp": datetime.now().isoformat(),
+        "codebert_adapter_sha": compute_file_hash(CODEBERT_ADAPTER_DIR + "/adapter_model.safetensors"),
+        "graphcodebert_adapter_sha": compute_file_hash(GRAPHCODEBERT_ADAPTER_DIR + "/adapter_model.safetensors"),
+        "codebert_checkpoint_sha": compute_file_hash(CODEBERT_CHECKPOINT),
+        "graphcodebert_checkpoint_sha": compute_file_hash(GRAPHCODEBERT_CHECKPOINT),
+        "val_dataset_rows": len(results_df),
+        "val_dataset_path": VAL_DATA_PATH,
+        "seed": SEED,
+        "batch_size": BATCH_SIZE,
+        "max_length": MAX_LENGTH
+    }
+
+    metadata_path = OUTPUT_CSV_PATH.replace('.csv', '_meta.json')
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    logger.info(f"💾 Saved metadata to: {metadata_path}")
+
+    # 📈 Logging Professionalization: Runtime summary
+    total_time = time.time() - start_time
+    samples_per_sec = len(results_df) / total_time
+    peak_memory = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0
+
+    logger.info("\n" + "=" * 80)
+    logger.info("📊 EXECUTION SUMMARY")
+    logger.info("=" * 80)
+    logger.info(f"Total Samples:     {len(results_df):,}")
+    logger.info(f"Total Time:        {total_time/60:.1f} minutes ({total_time:.1f}s)")
+    logger.info(f"Throughput:        {samples_per_sec:.1f} samples/sec")
+    logger.info(f"CodeBERT Time:     {codebert_time/60:.1f} min")
+    logger.info(f"GraphCodeBERT Time: {graphcodebert_time/60:.1f} min")
+    if torch.cuda.is_available():
+        logger.info(f"GPU Memory Peak:   {peak_memory:.2f} GB")
+    logger.info(f"Output CSV Size:   {os.path.getsize(OUTPUT_CSV_PATH) / 1e6:.2f} MB")
 
     logger.info("\n" + "=" * 80)
     logger.info("✅ LOGIT EXPORT COMPLETE")
@@ -400,6 +545,12 @@ def main():
     logger.info("\nNext step: Run threshold_optimizer.py with this CSV file")
     logger.info(f"Command: python threshold_optimizer.py --input {OUTPUT_CSV_PATH}")
     logger.info("=" * 80)
+
+    # 🧩 Final Clean-up Hooks: Free memory before exit
+    del results_df, val_dataset, val_loader
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("🧹 Memory cleanup complete")
 
 if __name__ == "__main__":
     main()
