@@ -4,14 +4,14 @@
 # Author: Urva Gandhi
 # Model: XGBoost (Inference Mode)
 # Purpose: Ultra-fast vulnerability probability prediction
-# Standard: CodeGuardian Inference Standard v1.0
+# Standard: CodeGuardian Inference Standard v5.1
 # =============================
 
 """
-CodeGuardian Static Inference Engine - Production Standard v1.0
+CodeGuardian Static Inference Engine - Production Standard v5.1
 ===================================================================
 Production-ready Ultra-Fast Inference Engine for Static Features.
-Loads decoupled artifacts (Model, Scaler) and performs sub-20ms inference.
+Loads decoupled artifacts (Model, Scaler, Metadata) and performs sub-20ms inference.
 
 Features:
 ✅ Decoupled Artifact Loading (Model, Scaler, Metadata)
@@ -25,7 +25,7 @@ Features:
 Inference Configuration:
 - Input: List[107] or Dict
 - Output: JSON
-- Artifacts: static_model.pkl, static_scaler.pkl, metadata.json
+- Artifacts: static_model_{type}.pkl, static_scaler.pkl, metadata.json
 
 Usage (CLI):
     python src/ml/inference/inference_static.py --features-file row.json
@@ -48,9 +48,8 @@ from typing import Union, List, Dict, Any, Optional
 
 # Constants
 EXPECTED_FEATURE_COUNT = 107
-STATIC_MODELS_DIR = Path(__file__).resolve().parents[3] / "models" / "static"
-# Assuming structure: /src/ml/inference/inference_static.py -> ../../../models/static
-# = /codeGuardian/models/static
+STATIC_MODELS_DIR = Path("models/static").resolve()
+# Robust default path that works across environments (Kaggle, local, etc.)
 
 class StaticInferenceEngine:
     def __init__(self, models_dir: Optional[Union[str, Path]] = None):
@@ -68,15 +67,22 @@ class StaticInferenceEngine:
 
     def _load_artifacts(self):
         """Loads model, scaler, and metadata from disk."""
-        model_path = self.models_dir / "static_model.pkl"
         scaler_path = self.models_dir / "static_scaler.pkl"
         metadata_path = self.models_dir / "metadata.json"
 
-        if not all(p.exists() for p in [model_path, scaler_path, metadata_path]):
+        # PATCH 1: Auto-detect model file (supports xgb, lgb, rf, lr, svm)
+        model_files = list(self.models_dir.glob("static_model_*.pkl"))
+        if len(model_files) == 0:
             raise FileNotFoundError(
-                f"Missing static engine artifacts in {self.models_dir}. "
+                f"No static_model_*.pkl found in {self.models_dir}. "
                 "Ensure train_static.py has been run."
             )
+        model_path = model_files[0]
+
+        if not scaler_path.exists():
+            raise FileNotFoundError(f"Missing static_scaler.pkl in {self.models_dir}")
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"Missing metadata.json in {self.models_dir}")
 
         try:
             # Using joblib for fast loading
@@ -88,13 +94,12 @@ class StaticInferenceEngine:
 
             self.feature_order = self.metadata.get("feature_order", [])
 
-            # Validation
+            # PATCH 2: Enforce strict feature count validation
             if len(self.feature_order) != EXPECTED_FEATURE_COUNT:
-                # Warn but proceed, relying on dynamic shape if model supports it,
-                # but standard behavior is to enforce strictness for production.
-                # Just logging to stderr to avoid polluting stdout json
-                sys.stderr.write(f"WARNING: Metadata feature count ({len(self.feature_order)}) "
-                                 f"!= expected ({EXPECTED_FEATURE_COUNT})\n")
+                raise ValueError(
+                    f"Feature order mismatch ({len(self.feature_order)}). "
+                    f"Expected {EXPECTED_FEATURE_COUNT}. Static inference aborted."
+                )
 
         except Exception as e:
             raise RuntimeError(f"Failed to load static inference artifacts: {e}")

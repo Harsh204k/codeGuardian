@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # =============================
-# codeGuardian Static Feature Model Training Script - Phase 2
+# codeGuardian Static Feature Training Script - Phase 2
 # Author: Urva Gandhi
 # Model: XGBoost (Default) / LightGBM / RF / SVM
 # Purpose: Static vulnerability detection using 107 engineered features
-# Standard: CodeGuardian Training Standard v1.0
+# Standard: CodeGuardian Training Standard v5.1
 # =============================
 
 """
-CodeGuardian Static Model Training Pipeline - Production Standard v1.0
+CodeGuardian Static Model Training Pipeline - Production Standard v5.1
 ===================================================================
 Production-ready Static Feature-Engineered training script optimized for Kaggle & Local Execution.
 Implements fast, deterministic vulnerability detection using 107 lexical, complex, and structural features.
@@ -46,7 +46,7 @@ Input Structure (CSV):
 
 Output Structure:
 /models/static/
-├── static_model.pkl           # Trained classifier
+├── static_model_{type}.pkl    # Trained classifier (e.g., static_model_xgb.pkl)
 ├── static_scaler.pkl          # Preprocessing pipeline (Imputer + Scaler)
 ├── static_training_report.json # Detailed training metrics
 └── metadata.json              # Feature mapping and version info
@@ -68,64 +68,81 @@ Dependencies:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import sys
 import time
-import hashlib
-from pathlib import Path
+import warnings
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Tuple, Any, Optional
 
+import joblib
 import numpy as np
 import pandas as pd
-import joblib
-
-from sklearn.model_selection import StratifiedKFold, cross_validate
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import (
-    roc_auc_score, f1_score, precision_score, recall_score, accuracy_score,
-    make_scorer
-)
-from sklearn.base import BaseEstimator
-
-# Model Imports
-try:
-    import xgboost as xgb
-except ImportError:
-    xgb = None
-try:
-    import lightgbm as lgb
-except ImportError:
-    lgb = None
+from sklearn.base import BaseEstimator, clone
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    make_scorer,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import StratifiedKFold, cross_validate
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.svm import SVC
 
+# ==============================================================================
+# CONFIGURATION & CONSTANTS
+# ==============================================================================
+EXPECTED_FEATURE_COUNT = 107
+SEED_DEFAULT = 42
 
-# Configure Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Suppress minor warnings for cleaner output
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# ==============================================================================
+# LOGGING SETUP
+# ==============================================================================
 logger = logging.getLogger("StaticTrainer")
+logger.setLevel(logging.INFO)
 
+def setup_logging(output_dir: Path):
+    """Configures logging to both console and training_log.txt"""
+    # Clear existing handlers to avoid duplicates
+    if logger.hasHandlers():
+        logger.handlers.clear()
 
-def setup_log_file(output_dir: Path):
-    """Adds a file handler to the logger to save logs to separate file."""
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # Console Handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # File Handler
     log_file = output_dir / "training_log.txt"
     file_handler = logging.FileHandler(log_file, mode="a")
-    file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
+    logger.info(f"Logging initialized. Log file: {log_file}")
 
-def calculate_sha256(filepath: str) -> str:
-    """Calculates SHA256 hash of a file."""
+
+# ==============================================================================
+# UTILITY FUNCTIONS
+# ==============================================================================
+def calculate_sha256(filepath: Path) -> str:
+    """Calculates SHA256 hash of a file for integrity verification."""
     sha256_hash = hashlib.sha256()
     with open(filepath, "rb") as f:
         for byte_block in iter(lambda: f.read(4096), b""):
@@ -133,235 +150,258 @@ def calculate_sha256(filepath: str) -> str:
     return sha256_hash.hexdigest()
 
 
-def load_dataset(input_path: str) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
-    """Loads dataset, validates schema, updates missing values."""
-    logger.info(f"Loading dataset from: {input_path}")
+def load_and_validate_data(input_path: str) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
+    """
+    Loads dataset, renames columns, and performs strict validation.
+    """
+    logger.info(f"Loading dataset: {input_path}")
     if not Path(input_path).exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
+        logger.error(f"Input file not found: {input_path}")
+        sys.exit(1)
 
-    df = pd.read_csv(input_path)
+    try:
+        df = pd.read_csv(input_path)
+    except Exception as e:
+        logger.error(f"Failed to read CSV: {e}")
+        sys.exit(1)
 
+    # 1. Rename 'is_vulnerable' -> 'label'
+    if "is_vulnerable" in df.columns:
+        logger.info("Renaming 'is_vulnerable' column to 'label'...")
+        df.rename(columns={"is_vulnerable": "label"}, inplace=True)
+
+    # 2. Check for label
     if "label" not in df.columns:
-        raise ValueError("Dataset missing required column: 'label'")
+        logger.error("Dataset missing required 'label' (or 'is_vulnerable') column.")
+        sys.exit(1)
 
-    # Separate features and label
     y = df["label"]
     X = df.drop(columns=["label"])
 
-    feature_names = X.columns.tolist()
-    logger.info(f"Loaded {len(df)} records with {len(feature_names)} features.")
+    # Optional Polish: 1. Strict Binary Label Check
+    unique_labels = set(y.unique())
+    if not unique_labels.issubset({0, 1}):
+        logger.error(f"Invalid labels found: {unique_labels}. Must be {{0, 1}}.")
+        sys.exit(1)
 
-    # 107 feature validation (soft warning if mismatch, but strict in prompt spirit)
-    if len(feature_names) != 107:
-        logger.warning(f"Expected 107 features, found {len(feature_names)}. Proceeding with discovered features.")
+    # Optional Polish: 2. Imbalance Warning
+    pos_ratio = y.mean()
+    if pos_ratio < 0.05 or pos_ratio > 0.95:
+        logger.warning(
+            f"⚠️ HIGH CLASS IMBALANCE DETECTED! Positive ratio: {pos_ratio:.4f}. "
+            "Metrics like Accuracy may be misleading. Focus on F1/AUC."
+        )
 
-    # Check for non-numeric columns
+    # 3. Numeric Validation
     non_numeric = X.select_dtypes(exclude=[np.number]).columns
     if len(non_numeric) > 0:
-        logger.error(f"Non-numeric features detected: {non_numeric.tolist()}")
-        raise ValueError("All features must be numeric.")
+        logger.error(f"Found non-numeric features: {list(non_numeric)}")
+        logger.error("Static engine requires PURE NUMERIC features (107 float/int).")
+        sys.exit(1)
+
+    feature_names = X.columns.tolist()
+
+    # 4. Feature Count Validation
+    if len(feature_names) != EXPECTED_FEATURE_COUNT:
+        logger.warning(
+            f"Feature count mismatch! Expected {EXPECTED_FEATURE_COUNT}, found {len(feature_names)}. "
+            "Proceeding, but ensure model inputs align."
+        )
+    else:
+        logger.info(f"Successfully validated {len(feature_names)} features.")
+
+    logger.info(f"Loaded {len(df)} records. Class dist: {y.value_counts().to_dict()}")
 
     return X, y, feature_names
 
 
-def get_model_pipeline(model_type: str, scale_type: str, seed: int) -> Pipeline:
-    """Constructs the training pipeline (Imputer -> Scaler -> Model)."""
+def get_model(model_type: str, seed: int) -> BaseEstimator:
+    """Returns the requested classifier instance."""
+    if model_type == "xgb":
+        try:
+            import xgboost as xgb
+            return xgb.XGBClassifier(
+                n_estimators=1000,
+                max_depth=6,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                tree_method="hist",  # Fast CPU/GPU
+                random_state=seed,
+                n_jobs=-1
+            )
+        except ImportError:
+            logger.error("XGBoost not installed. Install with: pip install xgboost")
+            sys.exit(1)
 
-    # 1. Imputer
-    imputer = SimpleImputer(strategy="median")
+    elif model_type == "lgb":
+        try:
+            import lightgbm as lgb
+            return lgb.LGBMClassifier(random_state=seed, n_jobs=-1)
+        except ImportError:
+            logger.error("LightGBM not installed.")
+            sys.exit(1)
 
-    # 2. Scaler
-    if scale_type == "minmax":
+    elif model_type == "rf":
+        return RandomForestClassifier(n_estimators=200, random_state=seed, n_jobs=-1)
+
+    elif model_type == "lr":
+        return LogisticRegression(max_iter=1000, random_state=seed)
+
+    elif model_type == "svm":
+        return SVC(probability=True, random_state=seed)
+
+    else:
+        logger.error(f"Unknown model type: {model_type}")
+        sys.exit(1)
+
+
+# ==============================================================================
+# MAIN TRAINING LOGIC
+# ==============================================================================
+def train():
+    parser = argparse.ArgumentParser(description="CodeGuardian Static Feature Training")
+    parser.add_argument("--input", required=True, help="Path to validated_features.csv")
+    parser.add_argument("--output-dir", required=True, help="Artifact output directory")
+    parser.add_argument("--model-type", default="xgb", choices=["xgb", "lgb", "rf", "lr", "svm"])
+    parser.add_argument("--scale", default="standard", choices=["standard", "minmax"])
+    parser.add_argument("--cv-folds", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=SEED_DEFAULT)
+
+    args = parser.parse_args()
+
+    # 1. Setup Directories & Logging
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(output_dir)
+
+    start_time_glob = time.time()
+    logger.info("=" * 60)
+    logger.info(" STARTING STATIC ENGINE TRAINING (Phase 2)")
+    logger.info(f" Config: Model={args.model_type.upper()}, Scale={args.scale}, CV={args.cv_folds}, Seed={args.seed}")
+    logger.info("=" * 60)
+
+    # 2. Load Data
+    X, y, feature_names = load_and_validate_data(args.input)
+
+    # 3. Construct Preprocessing Pipeline
+    # Median Imputer -> Scaler
+    if args.scale == "minmax":
         scaler = MinMaxScaler()
     else:
         scaler = StandardScaler()
 
-    # 3. Model
-    if model_type == "xgb":
-        if xgb is None:
-            raise ImportError("XGBoost not installed.")
-        clf = xgb.XGBClassifier(
-            n_estimators=1000,
-            learning_rate=0.05,
-            max_depth=6,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            eval_metric="logloss",
-            random_state=seed,
-            n_jobs=-1,
-            early_stopping_rounds=50 # Configure early stopping logic if using .fit manually, but inside pipeline/CV it's trickier.
-                                     # For standard sklearn pipe, we rely on n_estimators or set early_stopping in fit_params if supported.
-                                     # To keep it simple and robust for CV, we use a robust fixed config or minimal early stopping if feasible.
-                                     # Standard sklearn XGB API handles early_stopping in fit, but Pipeline.fit passes kwargs to the last step?
-                                     # We will set reasonable defaults and skip complex callback injection for this robust script.
-        )
-    elif model_type == "lgb":
-        if lgb is None:
-            raise ImportError("LightGBM not installed.")
-        clf = lgb.LGBMClassifier(random_state=seed, n_jobs=-1)
-    elif model_type == "rf":
-        clf = RandomForestClassifier(n_estimators=200, random_state=seed, n_jobs=-1)
-    elif model_type == "lr":
-        clf = LogisticRegression(random_state=seed, max_iter=1000)
-    elif model_type == "svm":
-        clf = SVC(probability=True, random_state=seed)
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
+    preprocessing_pipe = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', scaler)
+    ])
 
-    steps = [
-        ("imputer", imputer),
-        ("scaler", scaler),
-        ("classifier", clf)
-    ]
+    # 4. Get Model
+    clf = get_model(args.model_type, args.seed)
 
-    return Pipeline(steps)
+    # 5. Cross-Validation (Full Pipeline to avoid leakage)
+    full_cv_pipeline = Pipeline([
+        ('preprocessor', preprocessing_pipe),
+        ('classifier', clf)
+    ])
 
+    logger.info(f"Statring Stratified {args.cv_folds}-Fold Cross-Validation...")
+    cv = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=args.seed)
 
-def train():
-    parser = argparse.ArgumentParser(description="CodeGuardian Static Model Trainer")
-    parser.add_argument("--input", required=True, help="Path to input CSV (features + label)")
-    parser.add_argument("--output-dir", required=True, help="Directory to save artifacts")
-    parser.add_argument("--model-type", default="xgb", choices=["xgb", "lgb", "rf", "lr", "svm"], help="Model algorithm")
-    parser.add_argument("--scale", default="standard", choices=["standard", "minmax"], help="Scaling method")
-    parser.add_argument("--cv-folds", type=int, default=5, help="Number of CV folds")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-
-    args = parser.parse_args()
-
-    # Initialize
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    setup_log_file(output_dir)
-
-    start_time = time.time()
-    logger.info("="*60)
-    logger.info("STARTING STATIC ENGINE TRAINING PHASE")
-    logger.info(f"Command: {' '.join(sys.argv)}")
-    logger.info(f"Settings: Model={args.model_type}, Scale={args.scale}, CV={args.cv_folds}, Seed={args.seed}")
-    logger.info("="*60)
+    scoring = {
+        'auc': 'roc_auc',
+        'f1': 'f1',
+        'precision': 'precision',
+        'recall': 'recall',
+        'accuracy': 'accuracy'
+    }
 
     try:
-        # Load Data
-        X, y, feature_names = load_dataset(args.input)
-
-        # Build Pipeline
-        pipeline = get_model_pipeline(args.model_type, args.scale, args.seed)
-
-        # Cross-Validation
-        logger.info(f"Starting {args.cv_folds}-Fold Stratified Cross-Validation...")
-        cv = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=args.seed)
-
-        scoring = {
-            'auc': 'roc_auc',
-            'f1': 'f1',
-            'precision': 'precision',
-            'recall': 'recall',
-            'accuracy': 'accuracy'
-        }
-
-        # Note: pipeline handles scaling/imputation inside CV loops to prevent leakage
-        cv_results = cross_validate(pipeline, X, y, cv=cv, scoring=scoring, n_jobs=-1)
-
-        metrics = {
-            "roc_auc_mean": float(np.mean(cv_results['test_auc'])),
-            "roc_auc_std": float(np.std(cv_results['test_auc'])),
-            "f1_mean": float(np.mean(cv_results['test_f1'])),
-            "precision_mean": float(np.mean(cv_results['test_precision'])),
-            "recall_mean": float(np.mean(cv_results['test_recall'])),
-            "accuracy_mean": float(np.mean(cv_results['test_accuracy'])),
-        }
-
-        logger.info("-" * 40)
-        logger.info("CROSS-VALIDATION RESULTS:")
-        for k, v in metrics.items():
-            if "_mean" in k:
-                logger.info(f"  {k:<20}: {v:.4f}")
-        logger.info("-" * 40)
-
-        # Final Training on Full Dataset
-        logger.info("Retraining on full dataset for production artifact...")
-        pipeline.fit(X, y)
-
-        # Artifact Paths
-        model_path = output_dir / "static_model.pkl"
-        scaler_path = output_dir / "static_scaler.pkl" # We save the whole pipeline actually, but prompt implies separate?
-                                                        # Prompt says "static_model.pkl" and "static_scaler.pkl".
-                                                        # If we save the pipeline, it contains both.
-                                                        # To follow prompt STRICTLY, I will extract steps.
-
-        # Extract components
-        trained_imputer = pipeline.named_steps['imputer']
-        trained_scaler = pipeline.named_steps['scaler']
-        trained_model = pipeline.named_steps['classifier']
-
-        # We need to save the scaler AND imputer potentially.
-        # Standard practice: save the whole pipeline as 'static_model.pkl'.
-        # However, the user specifically asked for `static_scaler.pkl`.
-        # I will save the pipeline as the primary model, but also export scaler for compliance if needed.
-        # BETTER APPROACH: Save the Pipeline as `static_model.pkl`.
-        # Wait, inference requirements say: "Load static_model.pkl, static_scaler.pkl ... Apply scaler -> model.predict_proba".
-        # This implies decoupled components. I will decouple them.
-
-        # 1. Save independent Scaler (combining Imputer + Scaler for convenience or just Scaler?)
-        # Ideally, the preprocessing pipeline (Imputer+Scaler) should be one artifact.
-        # I will bundle Imputer+Scaler into `static_scaler.pkl` to ensure robustness (missing values handling).
-
-        preprocessing_pipe = Pipeline([
-            ("imputer", trained_imputer),
-            ("scaler", trained_scaler)
-        ])
-        joblib.dump(preprocessing_pipe, scaler_path)
-
-        # 2. Save Model
-        joblib.dump(trained_model, model_path)
-
-        # 3. Report
-        report = {
-            "timestamp": datetime.now().isoformat(),
-            "metrics": metrics,
-            "parameters": {
-                "model_type": args.model_type,
-                "scale": args.scale,
-                "cv_folds": args.cv_folds,
-                "seed": args.seed,
-                "input_shape": list(X.shape)
-            },
-            "feature_count": len(feature_names)
-        }
-
-        report_path = output_dir / "static_training_report.json"
-        with open(report_path, "w") as f:
-            json.dump(report, f, indent=2)
-
-        # 4. Metadata
-        # Calculate hashes
-        model_hash = calculate_sha256(str(model_path))
-        scaler_hash = calculate_sha256(str(scaler_path))
-
-        metadata = {
-            "model_version": "2.0.0-static",
-            "framework": "codeGuardian-Phase2",
-            "feature_order": feature_names,
-            "artifacts": {
-                "static_model.pkl": model_hash,
-                "static_scaler.pkl": scaler_hash
-            },
-            "created_at": datetime.now().isoformat()
-        }
-
-        metadata_path = output_dir / "metadata.json"
-        with open(metadata_path, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        logger.info(f"Artifacts saved to {output_dir}")
-        logger.info("Training Complete successfully.")
-
+        cv_results = cross_validate(
+            full_cv_pipeline, X, y, cv=cv, scoring=scoring, n_jobs=-1, return_train_score=False
+        )
     except Exception as e:
-        logger.error(f"Training failed: {e}", exc_info=True)
+        logger.error(f"Cross-Validation failed: {e}")
         sys.exit(1)
-    finally:
-        elapsed = time.time() - start_time
-        logger.info(f"Total execution time: {elapsed:.2f} seconds")
+
+    # Summarize Metrics
+    metrics_summary = {}
+    logger.info("-" * 40)
+    logger.info(" CROSS-VALIDATION RESULTS (Mean ± Std)")
+    logger.info("-" * 40)
+    for score_name in scoring.keys():
+        key = f"test_{score_name}"
+        mean_val = np.mean(cv_results[key])
+        std_val = np.std(cv_results[key])
+        metrics_summary[f"{score_name}_mean"] = float(mean_val)
+        metrics_summary[f"{score_name}_std"] = float(std_val)
+        logger.info(f" {score_name.upper():<10}: {mean_val:.4f} ± {std_val:.4f}")
+    logger.info("-" * 40)
+
+    # 6. Final Retraining (Decoupled Artifacts)
+    # We must save the Preprocessing Pipeline and the Classifier SEPARATELY.
+
+    logger.info("Retraining final model on FULL dataset...")
+
+    # Fit Preprocessing Pipeline
+    preprocessing_pipe.fit(X, y)
+    X_transformed = preprocessing_pipe.transform(X)
+
+    # Fit Classifier on Transformed Data
+    # Clone classifier to ensure fresh start
+    final_model = clone(clf)
+    final_model.fit(X_transformed, y)
+
+    # 7. Artifact Export
+    model_filename = f"static_model_{args.model_type}.pkl"
+    model_path = output_dir / model_filename
+    scaler_path = output_dir / "static_scaler.pkl"
+
+    logger.info(f"Saving artifacts to {output_dir}...")
+
+    # Save Model (Classifier Only)
+    joblib.dump(final_model, model_path)
+
+    # Save Scaler (Pipeline: Imputer -> Scaler)
+    joblib.dump(preprocessing_pipe, scaler_path)
+
+    # Calculate Hashes
+    model_hash = calculate_sha256(model_path)
+    scaler_hash = calculate_sha256(scaler_path)
+
+    # Metadata
+    metadata = {
+        "model_version": "2.0.0-static-phase2",
+        "training_version": "static-v2.0",
+        "algorithm": args.model_type,
+        "timestamp": datetime.now().isoformat(),
+        "feature_order": feature_names,
+        "input_hashes": {
+            model_filename: model_hash,
+            "static_scaler.pkl": scaler_hash
+        },
+        "model_parameters": final_model.get_params(),
+        "training_config": vars(args)
+    }
+
+    with open(output_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    # Training Report
+    report = {
+        "metrics": metrics_summary,
+        "input_shape": list(X.shape),
+        "settings": vars(args),
+        "seed": args.seed,
+        "execution_time_seconds": time.time() - start_time_glob
+    }
+
+    with open(output_dir / "static_training_report.json", "w") as f:
+        json.dump(report, f, indent=2)
+
+    logger.info(f"Training Complete. Time: {time.time() - start_time_glob:.2f}s")
+    logger.info("Successfully generated all artifacts.")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
